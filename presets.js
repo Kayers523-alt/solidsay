@@ -293,7 +293,7 @@
     { id: "pi5",    name: "Raspberry Pi 5",   short: "Raspberry Pi 5", gen: "heatsink",  W: 85,  D: 56,  fins: 9,  finH: 12, dies: 1, power: 12,  mat: "aluminum", note: "SBC", rjc: 0.6, srcW: 17, srcD: 17 },
     { id: "esp32",  name: "ESP32-S3 DevKit",  short: "ESP32-S3",       gen: "enclosure", W: 62,  D: 28,  fins: 0,  finH: 8,  dies: 1, power: 5,   mat: "fr4",      note: "IoT module" },
     { id: "orin",   name: "NVIDIA Orin Nano", short: "Orin Nano",      gen: "heatsink",  W: 100, D: 79,  fins: 14, finH: 16, dies: 1, power: 25,  mat: "aluminum", note: "Edge AI", rjc: 0.3, srcW: 28, srcD: 28 },
-    // AMD Instinct MI300X: 750 W OAM module power (do NOT use 350 W).
+    // AMD Instinct MI300X: 750 W OAM module power (locked at 750 W).
     { id: "mi300x", name: "AMD MI300X",       short: "AMD MI300X",     gen: "chiplet",   W: 110, D: 110, fins: 20, finH: 22, dies: 8, power: 750, mat: "copper",   note: "OAM module, 750 W", air: "forced", hForced: 120, rjc: 0.02 },
     { id: "nema17", name: "NEMA-17 Bracket",  short: "NEMA-17",        gen: "bracket",   W: 56,  D: 56,  fins: 0,  finH: 10, dies: 1, power: 8,   mat: "aluminum", note: "Stepper mount" }
   ].concat(PROTOFLOW_BOARDS);
