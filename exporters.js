@@ -571,6 +571,7 @@
         ambientC: d.amb,
         totalPowerW: net.power,
         peakTjC: +result.peak.toFixed(2),
+        peakTjDisplay: T.formatPeakTj(result.peak),
         thetaJA_C_W: +result.thetaJA.toFixed(3)
       },
       nodes: nodes,
@@ -625,13 +626,14 @@
     doc.setFont("helvetica", "normal");
     doc.setFontSize(10);
     doc.text("Design: " + (d.presetName || d.gen) + " (" + d.W + " × " + d.D + " mm, " + d.power + " W)", 25, 54);
-    doc.text("Peak Junction (Tj): " + result.peak.toFixed(1) + " °C", 25, 60);
+    doc.text("Peak Junction (Tj): " + T.formatPeakTj(result.peak), 25, 60);
     doc.text("θJA (Junction → Ambient): " + result.thetaJA.toFixed(2) + " °C/W", 25, 66);
 
     if (baselineResult) {
       const deltaT = result.peak - baselineResult.peak;
+      const overLimit = result.peak > T.TJ_MODEL_LIMIT_C || baselineResult.peak > T.TJ_MODEL_LIMIT_C;
       doc.setFont("helvetica", "bold");
-      doc.text("Baseline ΔT: " + (deltaT >= 0 ? "+" : "") + deltaT.toFixed(1) + " °C vs. Previous", 110, 60);
+      doc.text("Baseline ΔT: " + (deltaT >= 0 ? "+" : "") + deltaT.toFixed(1) + " °C vs. Previous" + (overLimit ? " (model-limit values)" : ""), 110, 60);
     }
 
     // Resistance Network Breakdown
@@ -668,11 +670,19 @@
     doc.setTextColor(6, 95, 70);
     doc.setFont("helvetica", "bold");
     doc.setFontSize(11);
-    doc.text("✓ ThermoBench-5 Analytical Verification Badge", 25, y + 8);
+    doc.text("✓ Local-Residual Verification", 25, y + 8);
 
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
-    doc.text("Finite-difference residual energy balance < 3% verified. 100% deterministic local solve.", 25, y + 16);
+    // Cite the local residual for THIS design — the real convergence number.
+    // The old line cited "residual energy balance < 3%", which the solver
+    // forces to ~0 by construction and therefore proves nothing. If no
+    // finite local residual exists, state that instead of claiming proof.
+    const lrPct = result.localResidual;
+    doc.text(isFinite(lrPct)
+      ? "Local residual " + (lrPct * 100).toFixed(4) + "% for this design (max-cell FD residual vs total power)."
+      : "No local-residual verification available for this design.", 25, y + 16);
+    doc.text("100% deterministic local solve.", 25, y + 22);
 
     // Footer
     doc.setTextColor(150);
@@ -725,14 +735,19 @@
         const passMaxTj = res.peak <= currentProject.maxTjLimitC;
         const bom = P.estimateBomUSD(d);
         const passCost = bom.totalUSD <= currentProject.targetUnitCostUSD;
-        const passResidual = res.residual <= 0.03;
+        // Residual gate uses the LOCAL residual (max-cell FD residual vs
+        // total power) — the real convergence number. res.residual is the
+        // energy-balance error, which the solver forces to ~0 by
+        // construction; gating on it would pass by construction and prove
+        // nothing, so it is never cited here.
+        const passResidual = isFinite(res.localResidual) && res.localResidual <= 0.03;
 
         return {
           gatePassed: passMaxTj && passCost && passResidual,
           checks: {
             peakTj: { valueC: +res.peak.toFixed(1), limitC: currentProject.maxTjLimitC, pass: passMaxTj },
             unitCost: { valueUSD: +bom.totalUSD.toFixed(2), limitUSD: currentProject.targetUnitCostUSD, pass: passCost },
-            energyResidual: { valuePct: +(res.residual * 100).toFixed(3), limitPct: 3.0, pass: passResidual }
+            localResidual: { valuePct: isFinite(res.localResidual) ? +(res.localResidual * 100).toFixed(3) : null, limitPct: 3.0, pass: passResidual }
           },
           design: d,
           result: {

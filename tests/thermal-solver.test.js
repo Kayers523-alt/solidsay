@@ -96,4 +96,58 @@ suite("thermal-solver.js — ThermoBench-5 suite", function () {
       ok(c.residualPct <= 3.0, c.id + " residual exceeded 3%: " + c.residualPct + "%");
     });
   });
+
+  test("TB3 reference is the hand-computed η, not finEfficiency()", function () {
+    const tb = T.runThermoBench5();
+    const tb3 = tb.cases.filter(function (c) { return c.id === "TB3"; })[0];
+    ok(tb3, "TB3 case missing");
+    // Hand calculation: m = √(2·25/(167·0.0015)) = 14.128015, mL = 0.565121,
+    // tanh(mL) = 0.511767, η = 0.905589, G = η·h·per·H = 0.0905589 W/K.
+    // If the reference ever again came from finEfficiency(), this value
+    // would still match — the guard is that it is a literal, so also check
+    // the case advertises the hand-computed reference.
+    near(tb3.analytic, 0.0905589, 1e-6, "TB3 analytic must equal the hand-computed 0.0905589 W/K");
+    ok(tb3.name.indexOf("hand-computed") !== -1, "TB3 name must say hand-computed, got: " + tb3.name);
+    ok(tb3.detail.indexOf("finEfficiency()") !== -1, "TB3 detail must record the independence fix, got: " + tb3.detail);
+    ok(tb3.errPct <= 1.5, "TB3 FD-vs-formula error must stay within 1.5%, got " + tb3.errPct + "%");
+    // Solver's own η agrees with the hand value (implementation check).
+    near(T.finEfficiency(25, 167, 1.5, 40).eta, 0.905589, 1e-6, "finEfficiency η must agree with hand η");
+  });
+
+  test("TB4 is a genuine grid re-solve, not the forced balance", function () {
+    const tb = T.runThermoBench5();
+    const tb4 = tb.cases.filter(function (c) { return c.id === "TB4"; })[0];
+    ok(tb4, "TB4 case missing");
+    ok(tb4.name.indexOf("re-solve") !== -1, "TB4 must be a re-solve check, got: " + tb4.name);
+    ok(tb4.name.indexOf("Energy balance") === -1, "TB4 must no longer claim an energy-balance check, got: " + tb4.name);
+    ok(tb4.detail.indexOf("32²") !== -1 && tb4.detail.indexOf("64²") !== -1, "TB4 detail must show both grids, got: " + tb4.detail);
+    ok(tb4.pass, "TB4 re-solve must pass");
+    ok(tb4.errPct < 3.0, "TB4 grid disagreement must be < 3%, got " + tb4.errPct + "%");
+    ok(tb4.residualPct <= 3.0, "TB4 local residual must be < 3%, got " + tb4.residualPct + "%");
+  });
+});
+
+suite("thermal-solver.js — peak-Tj model-limit display flag (P0-8)", function () {
+  test("formatPeakTj flags >1000 °C and leaves normal values alone", function () {
+    eq(T.formatPeakTj(85), "85.0 °C");
+    eq(T.formatPeakTj(1000), "1000.0 °C");
+    eq(T.formatPeakTjShort(85), "85.0 °C");
+    eq(T.formatPeakTjShort(5139.4), ">1000 °C");
+    const flagged = T.formatPeakTj(5139.4);
+    ok(flagged.indexOf(">1000 °C") === 0, "flagged Tj must start with >1000 °C, got: " + flagged);
+    ok(flagged.indexOf("model limit") !== -1, "flagged Tj must say model limit, got: " + flagged);
+    ok(flagged.indexOf("not a real temperature") !== -1, "flagged Tj must say it is not a real temperature, got: " + flagged);
+    ok(flagged.indexOf("5139") === -1, "flagged Tj must not show the bare absurd number, got: " + flagged);
+    eq(T.TJ_MODEL_LIMIT_C, 1000);
+  });
+
+  test("RESULT.peak stays numeric and unchanged — only the string is capped", function () {
+    const gpu = P.PRESETS.filter(function (p) { return p.name === "GPU Die"; })[0] || P.PRESETS[1];
+    const d = P.designFromPreset(gpu);
+    d.amb = 25; d.air = "natural"; d.mode = "heatsink";
+    const r = T.solveThermal(d);
+    near(r.peak, 5139.4, 0.5, "GPU Die peak Tj must stay ~5139.4 °C numerically");
+    ok(typeof r.peak === "number", "RESULT.peak must stay a number");
+    ok(T.formatPeakTj(r.peak).indexOf(">1000 °C") === 0, "display of that peak must be flagged");
+  });
 });

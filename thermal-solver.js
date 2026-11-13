@@ -23,6 +23,26 @@
   const NAT_CHOKE_GAP_MM = 2.2;
   const MIN_CHOKE = 0.25;
   const RESIDUAL_LIMIT = 0.03;          // energy balance acceptance (3 %)
+  // Display-only model-limit flag for absurd peak Tj (P0-8, 2026-11-13).
+  // The solver is a screening model: uncooled bare-die designs can report
+  // peak Tj in the thousands of °C (e.g. GPU Die 5139 °C). That number is
+  // an uncooled bare-die model output, not a real temperature, so any UI
+  // or export string that prints Tj must flag it instead of showing the
+  // bare number. Physics untouched: RESULT.peak keeps the raw value; only
+  // the displayed string changes. formatPeakTjShort is the compact form
+  // for tight inline spots (tables, deltas, big-number readouts).
+  const TJ_MODEL_LIMIT_C = 1000;
+  const TJ_MODEL_LIMIT_NOTE = "model limit, uncooled bare-die output, not a real temperature";
+  function formatPeakTj(tj) {
+    if (typeof tj !== "number" || !isFinite(tj)) return "—";
+    if (tj <= TJ_MODEL_LIMIT_C) return tj.toFixed(1) + " °C";
+    return ">1000 °C — " + TJ_MODEL_LIMIT_NOTE;
+  }
+  function formatPeakTjShort(tj) {
+    if (typeof tj !== "number" || !isFinite(tj)) return "—";
+    if (tj <= TJ_MODEL_LIMIT_C) return tj.toFixed(1) + " °C";
+    return ">1000 °C";
+  }
   const now = (typeof performance !== "undefined" && performance.now) ? function () { return performance.now(); } : function () { return Date.now(); };
 
   const ASSUMPTIONS = [
@@ -575,10 +595,23 @@
       const analytic = tAmb + Pw / Gend + Pw * (L - dx) / (k * t * Dm);
       cases.push(bench("TB2", "1-D Fourier slab: ΔT = P·L/(k·t·D)", analytic, s.T[0], 0.5, s.balanceErr));
     })();
-    // TB3 — straight fin: FD fin conductance vs η·h·A_fin from finEfficiency().
+    // TB3 — straight fin: FD fin conductance vs η·h·A_fin, with η from an
+    // INDEPENDENT hand-computed reference (P0-3 fix, 2026-11-13). The old
+    // code built the "analytic" conductance by calling the solver's own
+    // finEfficiency(), so a wrong η would have passed unnoticed.
+    // Hand calculation (h = 25 W/m²K, k = 167 W/mK, t = 1.5 mm, H = 40 mm):
+    //   m  = √(2h / (k·t)) = √(2·25 / (167·0.0015)) = √199.600798 = 14.128015 1/m
+    //   mL = m·H = 14.128015 · 0.040 = 0.565121
+    //   tanh(mL) = (e^1.130241 − 1) / (e^1.130241 + 1)
+    //            = (3.096403 − 1) / (3.096403 + 1) = 0.511767
+    //   η  = tanh(mL)/mL = 0.511767 / 0.565121 = 0.905589
+    //   G  = η·h·per·H = 0.905589 · 25 · 0.10 · 0.040 = 0.0905589 W/K
+    // ETA_REF / ML_REF below are those hand-computed constants, as literals.
+    // This case must NEVER call finEfficiency() (or any solver function)
+    // to build its reference.
     (function () {
       const n = 256, h = 25, k = 167, tMm = 1.5, Hmm = 40, Dm = 0.05, Q = 5;
-      const fe = finEfficiency(h, k, tMm, Hmm);
+      const ETA_REF = 0.905589, ML_REF = 0.565121;  // hand-computed, see above
       const dx = (Hmm / 1000) / n, Ac = (tMm / 1000) * Dm, per = 2 * Dm;
       const gx = k * Ac / dx;
       const gc = new Float64Array(n).fill(h * per * dx), q = new Float64Array(n);
@@ -587,18 +620,31 @@
       // Node-centred cell 0 sits at the base: shift so that node 0 is x = 0.
       const s = solveGrid({ nx: n, ny: 1, gx: gx, gy: 0, gc: gc, q: q, tAmb: tAmb, tol: 1e-10, maxSweeps: 400000 });
       const Gfd = Q / (s.T[0] - tAmb);
-      const Gan = fe.eta * h * per * (Hmm / 1000);
-      cases.push(bench("TB3", "Fin equation: Q/θb = η·h·A_fin, η = tanh(mH)/mH (mH = " + fe.mL.toFixed(2) + ", η = " + fe.eta.toFixed(3) + ")", Gan, Gfd, 1.5, s.balanceErr));
+      const Gan = ETA_REF * h * per * (Hmm / 1000);
+      cases.push(bench("TB3", "Fin equation: Q/θb = η·h·A_fin, η = tanh(mH)/mH hand-computed (mH = " + ML_REF.toFixed(2) + ", η = " + ETA_REF.toFixed(3) + ")", Gan, Gfd, 1.5, s.residual, "η reference is a hard-coded hand value, not finEfficiency()"));
     })();
-    // TB4 — energy balance on the four ProtoFlow boards + Pi 5 + MI300X.
+    // TB4 — grid-independence re-solve on the four ProtoFlow boards + Pi 5 + MI300X.
+    // (Replaces the old energy-balance case, removed 2026-11-13: it read
+    // r.residual, the global balance the mean-mode correction forces to ~0
+    // by construction, so it passed by construction and proved nothing.)
+    // Each board is solved twice from a cold start at two different grids
+    // (32×32 tol 1e-6 vs 64×64 tol 1e-7); the two peak-Tj values must agree
+    // to < 3 %. The two discretisations can only agree if both solves have
+    // genuinely converged to the same field — this check cannot pass by
+    // construction. Residual reported is the worst local (PDE) residual,
+    // not the forced global balance.
     (function () {
-      let worst = 0, worstName = "";
+      let worst = 0, worstLocal = 0, worstName = "", worstDetail = "";
       const list = P.PROTOFLOW_BOARDS.concat(P.FAMOUS_BOARDS.filter(function (b) { return b.id === "pi5" || b.id === "mi300x"; }));
       list.forEach(function (b) {
-        const r = solveThermal(P.designFromPreset(b));
-        if (r.residual >= worst) { worst = r.residual; worstName = b.short || b.name; }
+        const d = P.designFromPreset(b);
+        const r32 = solveThermal(d, { grid: 32, tol: 1e-6 });
+        const r64 = solveThermal(d, { grid: 64, tol: 1e-7 });
+        const diff = Math.abs(r32.peak - r64.peak) / Math.max(1e-12, Math.abs(r64.peak));
+        worstLocal = Math.max(worstLocal, r32.localResidual, r64.localResidual);
+        if (diff > worst) { worst = diff; worstName = b.short || b.name; worstDetail = "worst: " + worstName + " — 32² Tj " + r32.peak.toFixed(1) + " °C vs 64² Tj " + r64.peak.toFixed(1) + " °C"; }
       });
-      cases.push(bench("TB4", "Energy balance Σ h·A·(T−T∞) = P on 6 reference boards", 1, 1 - worst, RESIDUAL_LIMIT * 100, worst, "worst: " + worstName + " " + (worst * 100).toFixed(3) + " %"));
+      cases.push(bench("TB4", "Grid-independence re-solve (32² vs 64² peak Tj) on 6 reference boards", 1, 1 - worst, 3, worstLocal, worstDetail));
     })();
     // TB5 — grid independence: 32×32 vs 64×64 plate rise on the Pi 5 heatsink.
     (function () {
@@ -634,7 +680,8 @@
   }
 
   return {
-    VERSION: "2.0.0", GRID: GRID, NAT_CHOKE_GAP_MM: NAT_CHOKE_GAP_MM, RESIDUAL_LIMIT: RESIDUAL_LIMIT, ASSUMPTIONS: ASSUMPTIONS,
+    VERSION: "2.0.0", GRID: GRID, NAT_CHOKE_GAP_MM: NAT_CHOKE_GAP_MM, RESIDUAL_LIMIT: RESIDUAL_LIMIT, TJ_MODEL_LIMIT_C: TJ_MODEL_LIMIT_C, ASSUMPTIONS: ASSUMPTIONS,
+    formatPeakTj: formatPeakTj, formatPeakTjShort: formatPeakTjShort,
     finEfficiency: finEfficiency, finSpacing: finSpacing, chokeFactor: chokeFactor, convectionModel: convectionModel,
     solveGrid: solveGrid, solveGridMultilevel: solveGridMultilevel, solveThermal: solveThermal,
     spreadingResistance: spreadingResistance, resistanceNetwork: resistanceNetwork, quickTj: quickTj,

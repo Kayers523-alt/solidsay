@@ -86,6 +86,6 @@ suite("exporters.js — CTM-JSON & PDF Report & SolidSayMCP", function () {
     coolDesign.air = "forced";
     const gateRes = mcp.run_thermal_gate(coolDesign);
     ok(gateRes.checks.peakTj.pass, "Peak Tj should pass limit with forced air cooling");
-    ok(gateRes.checks.energyResidual.pass);
+    ok(gateRes.checks.localResidual.pass, "Local residual should pass the 3% limit");
   });
 });

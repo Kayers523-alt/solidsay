@@ -145,7 +145,7 @@
         const probeChip = $("#hudProbeChip");
         if (probeChip && temp !== null) {
           probeChip.hidden = false;
-          $("#hudProbe").textContent = `📍 X: ${pt.x.toFixed(1)}mm, Y: ${pt.z.toFixed(1)}mm · ${temp.toFixed(1)}°C`;
+          $("#hudProbe").textContent = `📍 X: ${pt.x.toFixed(1)}mm, Y: ${pt.z.toFixed(1)}mm · ${T.formatPeakTjShort(temp)}`;
         }
       }
     });
@@ -231,22 +231,40 @@
     if (!RESULT) return;
     const tj = RESULT.peak;
     const tjEl = $("#hudTj");
-    tjEl.textContent = tj.toFixed(1) + " °C";
+    tjEl.textContent = T.formatPeakTj(tj);
     tjEl.className = tj > 100 ? "hot" : (tj > 80 ? "warm" : "cool");
     $("#hudTheta").textContent = RESULT.thetaJA.toFixed(2) + " °C/W";
 
-    $("#statTj").textContent = tj.toFixed(1) + " °C";
+    $("#statTj").textContent = T.formatPeakTj(tj);
     $("#statTj").className = "v " + (tj > 100 ? "bad" : (tj > 80 ? "" : "ok"));
     $("#statTheta").textContent = RESULT.thetaJA.toFixed(2) + " °C/W";
     $("#statMs").textContent = RESULT.ms.toFixed(1) + " ms";
 
-    $("#bigTemp").textContent = tj.toFixed(0) + "°C";
+    // Per-design verification badge (P0-1): shows THIS design's real local
+    // residual (max-cell FD residual as % of total power) and the measured
+    // solve time for this solve. The old static "Verified (<3% Residual)"
+    // cited the energy balance, which the solver forces to ~0 by
+    // construction and therefore proves nothing; the "(<50ms)" half was
+    // also violated in the browser (63.6/68.3 ms observed). If the solve
+    // did not converge or no finite residual exists, show NO verification
+    // claim at all — just the (true) on-device / zero-cloud fact.
+    const badgeEl = $("#localBadgeText");
+    if (badgeEl) {
+      if (RESULT.converged && isFinite(RESULT.localResidual)) {
+        const msTxt = isFinite(RESULT.ms) ? RESULT.ms.toFixed(1) + " ms" : "—";
+        badgeEl.textContent = "🟢 100% On-Device Solve · 0 Cloud Calls · Local residual " + (RESULT.localResidual * 100).toFixed(4) + "% ✓ · " + msTxt;
+      } else {
+        badgeEl.textContent = "🟢 100% On-Device Solve · 0 Cloud Calls";
+      }
+    }
+
+    $("#bigTemp").textContent = tj > T.TJ_MODEL_LIMIT_C ? ">1000°C" : tj.toFixed(0) + "°C";
     $("#bigTemp").style.color = tj > 100 ? "var(--red)" : (tj > 80 ? "var(--amber)" : "var(--green)");
     $("#bigTempLabel").textContent = (S.showcase ? "Showcase · room-temp demo only · " : "Peak junction · ") + S.power + " W · " + P.MATERIALS[S.mat].label;
     $("#hotBanner").classList.toggle("show", tj > 100);
 
     $("#legendLo").textContent = S.amb.toFixed(0) + "°";
-    $("#legendHi").textContent = Math.max(tj, S.amb + 5).toFixed(0) + "°";
+    $("#legendHi").textContent = (tj > T.TJ_MODEL_LIMIT_C ? ">1000" : Math.max(tj, S.amb + 5).toFixed(0)) + "°";
 
     // Bare die comparison
     const chip = $("#hudDeltaChip");
@@ -258,7 +276,8 @@
       BARE_RESULT = rb;
       const d = rb.peak - rh.peak;
       chip.hidden = false;
-      $("#hudDelta").textContent = `heatsink saves ${d.toFixed(1)} °C (bare ${rb.peak.toFixed(0)}° vs sink ${rh.peak.toFixed(0)}°)`;
+      const overLimit = rb.peak > T.TJ_MODEL_LIMIT_C || rh.peak > T.TJ_MODEL_LIMIT_C;
+      $("#hudDelta").textContent = `heatsink saves ${d.toFixed(1)} °C (bare ${T.formatPeakTjShort(rb.peak)} vs sink ${T.formatPeakTjShort(rh.peak)})` + (overLimit ? " — model-limit output, not real temperatures" : "");
     } else {
       chip.hidden = true;
     }
@@ -399,9 +418,9 @@
     if (opt.feasible) {
       Object.assign(S, opt.design);
       refresh(false);
-      msg.textContent = `Done — Tj is now ${opt.proposedTj.toFixed(1)} °C. Changes: ${opt.steps.join(" · ") || "none needed"}. (FD-verified)`;
+      msg.textContent = `Done — Tj is now ${T.formatPeakTjShort(opt.proposedTj)}. Changes: ${opt.steps.join(" · ") || "none needed"}. (FD-verified)`;
     } else {
-      msg.textContent = `Best effort: Tj ${opt.proposedTj.toFixed(1)} °C. ${opt.reason}`;
+      msg.textContent = `Best effort: Tj ${T.formatPeakTjShort(opt.proposedTj)}. ${opt.reason}`;
     }
   }
 
@@ -549,7 +568,7 @@
       ["A", "B", "C"].forEach(k => {
         const v = variants[k];
         if (v) {
-          html += `<tr><td><b>${k}</b></td><td>${v.name}</td><td>${v.design.W}×${v.design.D}mm</td><td>${v.design.fins}</td><td>${v.design.power}W</td><td>${v.result.peak.toFixed(1)}°C</td><td>${v.result.thetaJA.toFixed(2)}°C/W</td></tr>`;
+          html += `<tr><td><b>${k}</b></td><td>${v.name}</td><td>${v.design.W}×${v.design.D}mm</td><td>${v.design.fins}</td><td>${v.design.power}W</td><td>${T.formatPeakTjShort(v.result.peak)}</td><td>${v.result.thetaJA.toFixed(2)}°C/W</td></tr>`;
         } else {
           html += `<tr><td><b>${k}</b></td><td colspan="6" style="color:var(--dim);">Empty (click Save as Variant ${k})</td></tr>`;
         }
@@ -642,7 +661,11 @@
           peakTj: RESULT.peak,
           thetaJA: RESULT.thetaJA,
           converged: RESULT.converged,
-          residual: RESULT.residual
+          // Local residual (max-cell FD residual vs total power) — the real
+          // convergence number. RESULT.residual is the energy-balance error,
+          // which the solver forces to ~0 by construction; it must never be
+          // cited as convergence proof, so it is not recorded here.
+          localResidual: RESULT.localResidual
         }
       };
       const json = JSON.stringify(snapshot, null, 2);
