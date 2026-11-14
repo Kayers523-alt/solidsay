@@ -33,6 +33,20 @@
   const FDM_INFILL = 0.35;
   const K_COPPER_FOIL = 385;        // PCB copper planes
   const OZ_TO_MM = 0.035;           // 1 oz/ft² copper ≈ 35 µm
+  // Exact copper thickness table (0.5 oz = 17.5 µm, 1 oz = 35 µm, 2 oz = 70 µm).
+  const COPPER_OZ_TABLE = {
+    0.5: { oz: 0.5, thicknessUm: 17.5, thicknessMm: 0.0175, label: "0.5 oz (17.5 µm)" },
+    1:   { oz: 1.0, thicknessUm: 35.0, thicknessMm: 0.0350, label: "1 oz (35 µm)" },
+    2:   { oz: 2.0, thicknessUm: 70.0, thicknessMm: 0.0700, label: "2 oz (70 µm)" }
+  };
+  function copperThicknessUm(oz) {
+    if (COPPER_OZ_TABLE[oz]) return COPPER_OZ_TABLE[oz].thicknessUm;
+    const w = (typeof oz === "number" && isFinite(oz) && oz > 0) ? oz : 1;
+    return w * 35.0;
+  }
+  function copperThicknessMm(oz) {
+    return copperThicknessUm(oz) / 1000;
+  }
 
   /* ------------------------------------------------------------------ */
   /* Datasheet component & TIM catalog                                  */
@@ -98,7 +112,18 @@
     { id: "pkg_bsc010n04ls", kind: "package", mfr: "Infineon", mpn: "BSC010N04LS", desc: "OptiMOS 40 V 1.0 mΩ, SuperSO8",
       thetaJC: 1.0, priceUSD: 1.90, distributor: { name: "DigiKey", query: "BSC010N04LS" }, apply: { rjc: 1.0 } },
     { id: "pkg_stm32h743", kind: "package", mfr: "STMicroelectronics", mpn: "STM32H743VIT6", desc: "Cortex-M7 MCU, LQFP100",
-      thetaJC: 7.0, priceUSD: 11.50, distributor: { name: "LCSC", query: "STM32H743VIT6" }, apply: { rjc: 7.0 } }
+      thetaJC: 7.0, priceUSD: 11.50, distributor: { name: "LCSC", query: "STM32H743VIT6" }, apply: { rjc: 7.0 } },
+
+    /* ---- Copper weight swaps (0.5 oz = 17.5 µm, 1 oz = 35 µm, 2 oz = 70 µm) ---- */
+    { id: "cu_weight_05oz", kind: "copper", mfr: "IPC-4562", mpn: "CU-FOIL-0.5OZ", desc: "0.5 oz/ft² electrodeposited copper foil (17.5 µm)",
+      copperOz: 0.5, tUm: 17.5, tMm: 0.0175, priceUSD: 0.00, distributor: { name: "JLCPCB / PCBWay", query: "0.5 oz copper stackup" },
+      apply: { copperOz: 0.5 } },
+    { id: "cu_weight_1oz", kind: "copper", mfr: "IPC-4562", mpn: "CU-FOIL-1.0OZ", desc: "1.0 oz/ft² standard copper foil (35 µm)",
+      copperOz: 1.0, tUm: 35.0, tMm: 0.0350, priceUSD: 1.50, distributor: { name: "JLCPCB / PCBWay", query: "1 oz copper stackup" },
+      apply: { copperOz: 1.0 } },
+    { id: "cu_weight_2oz", kind: "copper", mfr: "IPC-4562", mpn: "CU-FOIL-2.0OZ", desc: "2.0 oz/ft² heavy copper foil (70 µm)",
+      copperOz: 2.0, tUm: 70.0, tMm: 0.0700, priceUSD: 6.00, distributor: { name: "JLCPCB / PCBWay", query: "2 oz heavy copper stackup" },
+      apply: { copperOz: 2.0 } }
   ];
   const PARTS_BY_ID = {};
   PARTS_CATALOG.forEach(function (p) { PARTS_BY_ID[p.id] = p; });
@@ -121,7 +146,9 @@
     encH: 0,                         // 0 = auto enclosure interior height
     ports: null,                     // enclosure port cut-outs (null = defaults)
     pcb: null,                       // PCB stack + components for gen "pcb"
-    heatsinkPartId: null, fanPartId: null,
+    railV: 5.0,                      // Supply rail voltage (V), null when copper is null
+    copper: { traceWidthMm: 5, copperOz: 1, layers: 6, vias: 120 },
+    heatsinkPartId: null, fanPartId: null, copperPartId: null,
     board: "pi5", showcase: false, presetName: null
   };
   const LIMITS = {
@@ -175,6 +202,23 @@
       d.fins = maxF;
     }
     if (d.gen === "pcb" && !d.pcb) d.pcb = clone(DEFAULT_PCB);
+    if (input && Object.prototype.hasOwnProperty.call(input, "copper") && input.copper === null) {
+      d.copper = null;
+      d.railV = null;
+    } else if (d.copper && typeof d.copper === "object") {
+      const ozRaw = num(d.copper.copperOz, (d.pcb && d.pcb.copperOz) || 1);
+      const oz = (ozRaw <= 0.75) ? 0.5 : (ozRaw >= 1.5 ? 2 : 1);
+      d.copper = {
+        traceWidthMm: clamp(num(d.copper.traceWidthMm, 5), 0.1, 200),
+        copperOz: oz,
+        layers: Math.max(1, Math.round(clamp(num(d.copper.layers, (d.pcb && d.pcb.layers) || 4), 1, 64))),
+        vias: Math.max(1, Math.round(clamp(num(d.copper.vias, 64), 1, 10000)))
+      };
+      d.railV = clamp(num(d.railV, 5.0), 0.3, 1000);
+    } else {
+      d.copper = null;
+      d.railV = null;
+    }
     return { design: d, warnings: warnings };
   }
 
@@ -207,6 +251,7 @@
     {
       id: "preset_eth_gateway", name: "Industrial Ethernet + CAN-FD Gateway", short: "ETH/CAN-FD Gateway", gen: "pcb",
       W: 100, D: 80, fins: 0, finH: 0, dies: 1, power: 8.5, powerPeak: 8.5, mat: "fr4", air: "natural", note: "6-layer FR4, 2 oz planes",
+      railV: 24.0, copper: { traceWidthMm: 4, copperOz: 2, layers: 6, vias: 140 },
       pcb: {
         outline: "rect", boardT: 1.6, layers: 6, copperOz: 2, planeCount: 4, coverage: 0.55, standoffH: 6,
         holes: mountHoles(100, 80, 4, 3.2),
@@ -227,6 +272,7 @@
     {
       id: "preset_robot_io_24v", name: "Industrial 24 V Robot Peripheral I/O Controller", short: "24 V Robot I/O", gen: "pcb",
       W: 100, D: 80, fins: 0, finH: 0, dies: 1, power: 14.0, powerPeak: 14.0, mat: "fr4", air: "natural", note: "4-layer, worst-case load",
+      railV: 24.0, copper: { traceWidthMm: 5, copperOz: 1, layers: 4, vias: 110 },
       pcb: {
         outline: "rect", boardT: 1.6, layers: 4, copperOz: 1, planeCount: 2, coverage: 0.5, standoffH: 6,
         holes: mountHoles(100, 80, 4, 3.2),
@@ -244,6 +290,7 @@
     {
       id: "preset_robot_joint_foc", name: "Hollow-Shaft Robot Joint FOC Controller", short: "Robot Joint FOC", gen: "pcb",
       W: 55, D: 55, fins: 0, finH: 0, dies: 1, power: 28.0, powerPeak: 65.0, mat: "fr4", air: "natural", note: "Ø55 annular, 28 W / 65 W stall",
+      railV: 24.0, copper: { traceWidthMm: 8, copperOz: 2, layers: 6, vias: 180 },
       pcb: {
         outline: "annulus", innerD: 20, boardT: 1.6, layers: 6, copperOz: 2, planeCount: 4, coverage: 0.6, standoffH: 5,
         holes: [],
@@ -265,6 +312,7 @@
     {
       id: "preset_drone_fc_305", name: "30.5 mm Drone Flight Controller + 4-in-1 ESC", short: "Drone FC+ESC 30.5", gen: "pcb",
       W: 36, D: 36, fins: 0, finH: 0, dies: 1, power: 35.0, powerPeak: 110.0, mat: "fr4", air: "forced", hForced: 45, note: "30.5×30.5 M3 stack, prop-wash cooled",
+      railV: 24.0, copper: { traceWidthMm: 10, copperOz: 2, layers: 6, vias: 200 },
       pcb: {
         outline: "rect", boardT: 1.6, layers: 6, copperOz: 2, planeCount: 4, coverage: 0.6, standoffH: 5,
         holes: mountHoles(36, 36, 2.75, 3.2),     // 30.5 mm M3 pattern
@@ -290,12 +338,12 @@
   ];
 
   const FAMOUS_BOARDS = [
-    { id: "pi5",    name: "Raspberry Pi 5",   short: "Raspberry Pi 5", gen: "heatsink",  W: 85,  D: 56,  fins: 9,  finH: 12, dies: 1, power: 12,  mat: "aluminum", note: "SBC", rjc: 0.6, srcW: 17, srcD: 17 },
-    { id: "esp32",  name: "ESP32-S3 DevKit",  short: "ESP32-S3",       gen: "enclosure", W: 62,  D: 28,  fins: 0,  finH: 8,  dies: 1, power: 5,   mat: "fr4",      note: "IoT module" },
-    { id: "orin",   name: "NVIDIA Orin Nano", short: "Orin Nano",      gen: "heatsink",  W: 100, D: 79,  fins: 14, finH: 16, dies: 1, power: 25,  mat: "aluminum", note: "Edge AI", rjc: 0.3, srcW: 28, srcD: 28 },
+    { id: "pi5",    name: "Raspberry Pi 5",   short: "Raspberry Pi 5", gen: "heatsink",  W: 85,  D: 56,  fins: 9,  finH: 12, dies: 1, power: 12,  mat: "aluminum", note: "SBC", rjc: 0.6, srcW: 17, srcD: 17, railV: 5.0,  copper: { traceWidthMm: 5,  copperOz: 1, layers: 6,  vias: 120 } },
+    { id: "esp32",  name: "ESP32-S3 DevKit",  short: "ESP32-S3",       gen: "enclosure", W: 62,  D: 28,  fins: 0,  finH: 8,  dies: 1, power: 5,   mat: "fr4",      note: "IoT module",                           railV: 3.3,  copper: { traceWidthMm: 3,  copperOz: 1, layers: 4,  vias: 64 } },
+    { id: "orin",   name: "NVIDIA Orin Nano", short: "Orin Nano",      gen: "heatsink",  W: 100, D: 79,  fins: 14, finH: 16, dies: 1, power: 25,  mat: "aluminum", note: "Edge AI", rjc: 0.3, srcW: 28, srcD: 28, railV: 12.0, copper: { traceWidthMm: 8,  copperOz: 1, layers: 8,  vias: 180 } },
     // AMD Instinct MI300X: 750 W OAM module power (locked at 750 W).
-    { id: "mi300x", name: "AMD MI300X",       short: "AMD MI300X",     gen: "chiplet",   W: 110, D: 110, fins: 20, finH: 22, dies: 8, power: 750, mat: "copper",   note: "OAM module, 750 W", air: "forced", hForced: 120, rjc: 0.02 },
-    { id: "nema17", name: "NEMA-17 Bracket",  short: "NEMA-17",        gen: "bracket",   W: 56,  D: 56,  fins: 0,  finH: 10, dies: 1, power: 8,   mat: "aluminum", note: "Stepper mount" }
+    { id: "mi300x", name: "AMD MI300X",       short: "AMD MI300X",     gen: "chiplet",   W: 110, D: 110, fins: 20, finH: 22, dies: 8, power: 750, mat: "copper",   note: "OAM module, 750 W", air: "forced", hForced: 120, rjc: 0.02, railV: 12.0, copper: { traceWidthMm: 36, copperOz: 2, layers: 12, vias: 1200 } },
+    { id: "nema17", name: "NEMA-17 Bracket",  short: "NEMA-17",        gen: "bracket",   W: 56,  D: 56,  fins: 0,  finH: 10, dies: 1, power: 8,   mat: "aluminum", note: "Stepper mount",                        railV: null, copper: null }
   ].concat(PROTOFLOW_BOARDS);
   const MI300X_OAM_POWER_W = 750;
 
@@ -313,58 +361,58 @@
   ];
   const PRESETS = [
     /* ---- Microchip & packaging — 12 ---- */
-    { name: "CPU Die", cat: 0, gen: "chiplet", W: 54, D: 54, fins: 0, finH: 6, dies: 1, power: 125, mat: "copper" },
-    { name: "GPU Die", cat: 0, gen: "chiplet", W: 70, D: 60, fins: 0, finH: 6, dies: 1, power: 250, mat: "copper" },
-    { name: "Neural Engine / NPU Die", cat: 0, gen: "chiplet", W: 45, D: 45, fins: 0, finH: 6, dies: 1, power: 35, mat: "copper" },
-    { name: "Chiplet Package (multi-die)", cat: 0, gen: "chiplet", W: 80, D: 80, fins: 0, finH: 10, dies: 4, power: 180, mat: "copper" },
-    { name: "HBM Memory Stack", cat: 0, gen: "chiplet", W: 70, D: 55, fins: 0, finH: 8, dies: 3, power: 140, mat: "copper" },
-    { name: "Interposer", cat: 0, gen: "chiplet", W: 65, D: 50, fins: 0, finH: 8, dies: 4, power: 60, mat: "copper" },
-    { name: "Heat Spreader Lid", cat: 0, gen: "chiplet", W: 60, D: 60, fins: 0, finH: 8, dies: 2, power: 90, mat: "copper" },
-    { name: "Substrate / BGA Package", cat: 0, gen: "chiplet", W: 55, D: 55, fins: 0, finH: 8, dies: 1, power: 45, mat: "aluminum" },
-    { name: "DRAM Memory Chip", cat: 0, gen: "chiplet", W: 40, D: 30, fins: 0, finH: 6, dies: 1, power: 8, mat: "aluminum" },
-    { name: "Power Management IC", cat: 0, gen: "chiplet", W: 38, D: 38, fins: 0, finH: 6, dies: 1, power: 15, mat: "aluminum" },
-    { name: "Capacitor Array / Passives", cat: 0, gen: "chiplet", W: 50, D: 40, fins: 0, finH: 6, dies: 6, power: 5, mat: "aluminum" },
-    { name: "Pin / BGA Ball Grid", cat: 0, gen: "chiplet", W: 60, D: 60, fins: 0, finH: 6, dies: 1, power: 20, mat: "aluminum" },
+    { name: "CPU Die", cat: 0, gen: "chiplet", W: 54, D: 54, fins: 0, finH: 6, dies: 1, power: 125, mat: "copper", railV: 1.8, copper: { traceWidthMm: 18, copperOz: 2, layers: 8, vias: 400 } },
+    { name: "GPU Die", cat: 0, gen: "chiplet", W: 70, D: 60, fins: 0, finH: 6, dies: 1, power: 250, mat: "copper", railV: 12.0, copper: { traceWidthMm: 22, copperOz: 2, layers: 10, vias: 600 } },
+    { name: "Neural Engine / NPU Die", cat: 0, gen: "chiplet", W: 45, D: 45, fins: 0, finH: 6, dies: 1, power: 35, mat: "copper", railV: 1.8, copper: { traceWidthMm: 12, copperOz: 1, layers: 6, vias: 240 } },
+    { name: "Chiplet Package (multi-die)", cat: 0, gen: "chiplet", W: 80, D: 80, fins: 0, finH: 10, dies: 4, power: 180, mat: "copper", railV: 12.0, copper: { traceWidthMm: 20, copperOz: 2, layers: 8, vias: 480 } },
+    { name: "HBM Memory Stack", cat: 0, gen: "chiplet", W: 70, D: 55, fins: 0, finH: 8, dies: 3, power: 140, mat: "copper", railV: 5.0, copper: { traceWidthMm: 18, copperOz: 2, layers: 8, vias: 500 } },
+    { name: "Interposer", cat: 0, gen: "chiplet", W: 65, D: 50, fins: 0, finH: 8, dies: 4, power: 60, mat: "copper", railV: 3.3, copper: { traceWidthMm: 14, copperOz: 1, layers: 6, vias: 360 } },
+    { name: "Heat Spreader Lid", cat: 0, gen: "chiplet", W: 60, D: 60, fins: 0, finH: 8, dies: 2, power: 90, mat: "copper", railV: null, copper: null },
+    { name: "Substrate / BGA Package", cat: 0, gen: "chiplet", W: 55, D: 55, fins: 0, finH: 8, dies: 1, power: 45, mat: "aluminum", railV: 3.3, copper: { traceWidthMm: 12, copperOz: 1, layers: 6, vias: 300 } },
+    { name: "DRAM Memory Chip", cat: 0, gen: "chiplet", W: 40, D: 30, fins: 0, finH: 6, dies: 1, power: 8, mat: "aluminum", railV: 1.8, copper: { traceWidthMm: 6, copperOz: 1, layers: 4, vias: 120 } },
+    { name: "Power Management IC", cat: 0, gen: "chiplet", W: 38, D: 38, fins: 0, finH: 6, dies: 1, power: 15, mat: "aluminum", railV: 5.0, copper: { traceWidthMm: 8, copperOz: 2, layers: 4, vias: 96 } },
+    { name: "Capacitor Array / Passives", cat: 0, gen: "chiplet", W: 50, D: 40, fins: 0, finH: 6, dies: 6, power: 5, mat: "aluminum", railV: 5.0, copper: { traceWidthMm: 6, copperOz: 1, layers: 4, vias: 80 } },
+    { name: "Pin / BGA Ball Grid", cat: 0, gen: "chiplet", W: 60, D: 60, fins: 0, finH: 6, dies: 1, power: 20, mat: "aluminum", railV: 3.3, copper: { traceWidthMm: 10, copperOz: 1, layers: 4, vias: 256 } },
     /* ---- Circuit boards & power — 10 ---- */
-    { name: "Raspberry Pi 5 Board", cat: 1, gen: "heatsink", W: 85, D: 56, fins: 9, finH: 12, dies: 1, power: 12, mat: "aluminum", srcW: 17, srcD: 17, rjc: 0.6 },
-    { name: "ESP32-S3 Board", cat: 1, gen: "enclosure", W: 62, D: 28, fins: 0, finH: 8, dies: 1, power: 5, mat: "fr4" },
-    { name: "FPGA Board", cat: 1, gen: "chiplet", W: 90, D: 70, fins: 0, finH: 10, dies: 5, power: 160, mat: "copper" },
-    { name: "Power Stage / Buck Converter Board", cat: 1, gen: "heatsink", W: 85, D: 60, fins: 8, finH: 12, dies: 1, power: 20, mat: "aluminum" },
-    { name: "EV Charger Power Board", cat: 1, gen: "heatsink", W: 120, D: 90, fins: 12, finH: 16, dies: 1, power: 180, mat: "copper" },
-    { name: "Motor Driver Board", cat: 1, gen: "heatsink", W: 85, D: 60, fins: 8, finH: 12, dies: 1, power: 30, mat: "aluminum" },
-    { name: "Sensor Board", cat: 1, gen: "enclosure", W: 70, D: 50, fins: 0, finH: 8, dies: 1, power: 4, mat: "fr4" },
-    { name: "NVIDIA Orin Nano Module", cat: 1, gen: "heatsink", W: 100, D: 79, fins: 14, finH: 16, dies: 1, power: 25, mat: "aluminum", srcW: 28, srcD: 28, rjc: 0.3 },
+    { name: "Raspberry Pi 5 Board", cat: 1, gen: "heatsink", W: 85, D: 56, fins: 9, finH: 12, dies: 1, power: 12, mat: "aluminum", srcW: 17, srcD: 17, rjc: 0.6, railV: 5.0, copper: { traceWidthMm: 5, copperOz: 1, layers: 6, vias: 120 } },
+    { name: "ESP32-S3 Board", cat: 1, gen: "enclosure", W: 62, D: 28, fins: 0, finH: 8, dies: 1, power: 5, mat: "fr4", railV: 3.3, copper: { traceWidthMm: 3, copperOz: 1, layers: 4, vias: 64 } },
+    { name: "FPGA Board", cat: 1, gen: "chiplet", W: 90, D: 70, fins: 0, finH: 10, dies: 5, power: 160, mat: "copper", railV: 12.0, copper: { traceWidthMm: 18, copperOz: 2, layers: 8, vias: 320 } },
+    { name: "Power Stage / Buck Converter Board", cat: 1, gen: "heatsink", W: 85, D: 60, fins: 8, finH: 12, dies: 1, power: 20, mat: "aluminum", railV: 12.0, copper: { traceWidthMm: 6, copperOz: 2, layers: 4, vias: 96 } },
+    { name: "EV Charger Power Board", cat: 1, gen: "heatsink", W: 120, D: 90, fins: 12, finH: 16, dies: 1, power: 180, mat: "copper", railV: 48.0, copper: { traceWidthMm: 16, copperOz: 2, layers: 6, vias: 240 } },
+    { name: "Motor Driver Board", cat: 1, gen: "heatsink", W: 85, D: 60, fins: 8, finH: 12, dies: 1, power: 30, mat: "aluminum", railV: 24.0, copper: { traceWidthMm: 8, copperOz: 2, layers: 4, vias: 110 } },
+    { name: "Sensor Board", cat: 1, gen: "enclosure", W: 70, D: 50, fins: 0, finH: 8, dies: 1, power: 4, mat: "fr4", railV: 3.3, copper: { traceWidthMm: 2.5, copperOz: 1, layers: 4, vias: 48 } },
+    { name: "NVIDIA Orin Nano Module", cat: 1, gen: "heatsink", W: 100, D: 79, fins: 14, finH: 16, dies: 1, power: 25, mat: "aluminum", srcW: 28, srcD: 28, rjc: 0.3, railV: 12.0, copper: { traceWidthMm: 8, copperOz: 1, layers: 8, vias: 180 } },
     // 750 W OAM module power.
-    { name: "AMD MI300X Chiplet Mockup", cat: 1, gen: "chiplet", W: 110, D: 110, fins: 0, finH: 10, dies: 8, power: 750, mat: "copper", air: "forced", hForced: 120, rjc: 0.02 },
-    { name: "Microcontroller Dev Board", cat: 1, gen: "enclosure", W: 90, D: 60, fins: 0, finH: 10, dies: 1, power: 6, mat: "fr4" },
-    /* ---- Cooling — 8 ---- */
-    { name: "Extruded Fin Heatsink", cat: 2, gen: "heatsink", W: 100, D: 80, fins: 14, finH: 20, dies: 1, power: 60, mat: "aluminum" },
-    { name: "Cold Plate", cat: 2, gen: "heatsink", W: 70, D: 70, fins: 0, finH: 6, dies: 1, power: 80, mat: "copper" },
-    { name: "Fan Shroud (40mm)", cat: 2, gen: "enclosure", W: 62, D: 62, fins: 0, finH: 10, dies: 1, power: 10, mat: "fr4" },
-    { name: "Vapor Chamber", cat: 2, gen: "heatsink", W: 90, D: 90, fins: 0, finH: 5, dies: 1, power: 120, mat: "copper" },
-    { name: "Heat Pipe Assembly", cat: 2, gen: "heatsink", W: 110, D: 60, fins: 6, finH: 12, dies: 1, power: 75, mat: "copper" },
-    { name: "Pin-Fin Heatsink", cat: 2, gen: "heatsink", W: 65, D: 65, fins: 11, finH: 18, dies: 1, power: 22, mat: "aluminum" },
-    { name: "Liquid Cooling Block", cat: 2, gen: "heatsink", W: 80, D: 80, fins: 0, finH: 8, dies: 1, power: 150, mat: "copper" },
-    { name: "Thermal Interface Pad / TIM Layer", cat: 2, gen: "heatsink", W: 50, D: 50, fins: 0, finH: 4, dies: 1, power: 20, mat: "aluminum" },
-    /* ---- Enclosures & 3D-print parts — 10 ---- */
-    { name: "Snap-Fit PCB Enclosure", cat: 3, gen: "enclosure", W: 95, D: 65, fins: 0, finH: 10, dies: 1, power: 8, mat: "fr4" },
-    { name: "Vented Enclosure Lid", cat: 3, gen: "enclosure", W: 120, D: 80, fins: 0, finH: 12, dies: 1, power: 18, mat: "aluminum" },
-    { name: "Wall Mount Bracket", cat: 3, gen: "bracket", W: 110, D: 50, fins: 0, finH: 12, dies: 1, power: 1, mat: "aluminum" },
-    { name: "DIN Rail Mount", cat: 3, gen: "enclosure", W: 105, D: 45, fins: 0, finH: 10, dies: 1, power: 12, mat: "fr4" },
-    { name: "L-Bracket / NEMA-17 Stepper Mount", cat: 3, gen: "bracket", W: 56, D: 56, fins: 0, finH: 10, dies: 1, power: 8, mat: "aluminum" },
-    { name: "Cable Management Clip", cat: 3, gen: "bracket", W: 55, D: 45, fins: 0, finH: 8, dies: 1, power: 1, mat: "aluminum" },
-    { name: "Standoff / Boss Mount", cat: 3, gen: "bracket", W: 60, D: 60, fins: 0, finH: 10, dies: 1, power: 1, mat: "aluminum" },
-    { name: "Raspberry Pi Case", cat: 3, gen: "enclosure", W: 92, D: 62, fins: 0, finH: 10, dies: 1, power: 12, mat: "fr4" },
-    { name: "Control Box / Junction Box", cat: 3, gen: "enclosure", W: 180, D: 120, fins: 0, finH: 14, dies: 1, power: 15, mat: "fr4" },
-    { name: "Ventilation Grille Panel", cat: 3, gen: "enclosure", W: 150, D: 100, fins: 0, finH: 8, dies: 1, power: 5, mat: "aluminum" },
-    /* ---- Robotics parts — 4 (static 3D-printable parts only) ---- */
-    { name: "Servo Bracket", cat: 4, gen: "bracket", W: 70, D: 50, fins: 0, finH: 10, dies: 1, power: 1, mat: "aluminum" },
-    { name: "Robot Joint / Hinge", cat: 4, gen: "bracket", W: 90, D: 40, fins: 0, finH: 8, dies: 1, power: 1, mat: "aluminum" },
-    { name: "Gripper Finger", cat: 4, gen: "bracket", W: 80, D: 30, fins: 0, finH: 8, dies: 1, power: 1, mat: "aluminum" },
-    { name: "Limb Segment / Arm Link", cat: 4, gen: "bracket", W: 140, D: 45, fins: 0, finH: 10, dies: 1, power: 1, mat: "aluminum" },
-    /* ---- Quantum showcase — 2 (visual showcase only) ---- */
-    { name: "Qubit Chip Array (superconducting)", cat: 5, gen: "chiplet", W: 60, D: 60, fins: 0, finH: 8, dies: 6, power: 5, mat: "copper", showcase: true },
-    { name: "Cryostat Cold Plate Stage", cat: 5, gen: "heatsink", W: 100, D: 100, fins: 0, finH: 10, dies: 1, power: 10, mat: "copper", showcase: true }
+    { name: "AMD MI300X Chiplet Mockup", cat: 1, gen: "chiplet", W: 110, D: 110, fins: 0, finH: 10, dies: 8, power: 750, mat: "copper", air: "forced", hForced: 120, rjc: 0.02, railV: 12.0, copper: { traceWidthMm: 36, copperOz: 2, layers: 12, vias: 1200 } },
+    { name: "Microcontroller Dev Board", cat: 1, gen: "enclosure", W: 90, D: 60, fins: 0, finH: 10, dies: 1, power: 6, mat: "fr4", railV: 5.0, copper: { traceWidthMm: 3, copperOz: 1, layers: 4, vias: 60 } },
+    /* ---- Cooling — 8 (passive cooling hardware: copper: null) ---- */
+    { name: "Extruded Fin Heatsink", cat: 2, gen: "heatsink", W: 100, D: 80, fins: 14, finH: 20, dies: 1, power: 60, mat: "aluminum", railV: null, copper: null },
+    { name: "Cold Plate", cat: 2, gen: "heatsink", W: 70, D: 70, fins: 0, finH: 6, dies: 1, power: 80, mat: "copper", railV: null, copper: null },
+    { name: "Fan Shroud (40mm)", cat: 2, gen: "enclosure", W: 62, D: 62, fins: 0, finH: 10, dies: 1, power: 10, mat: "fr4", railV: null, copper: null },
+    { name: "Vapor Chamber", cat: 2, gen: "heatsink", W: 90, D: 90, fins: 0, finH: 5, dies: 1, power: 120, mat: "copper", railV: null, copper: null },
+    { name: "Heat Pipe Assembly", cat: 2, gen: "heatsink", W: 110, D: 60, fins: 6, finH: 12, dies: 1, power: 75, mat: "copper", railV: null, copper: null },
+    { name: "Pin-Fin Heatsink", cat: 2, gen: "heatsink", W: 65, D: 65, fins: 11, finH: 18, dies: 1, power: 22, mat: "aluminum", railV: null, copper: null },
+    { name: "Liquid Cooling Block", cat: 2, gen: "heatsink", W: 80, D: 80, fins: 0, finH: 8, dies: 1, power: 150, mat: "copper", railV: null, copper: null },
+    { name: "Thermal Interface Pad / TIM Layer", cat: 2, gen: "heatsink", W: 50, D: 50, fins: 0, finH: 4, dies: 1, power: 20, mat: "aluminum", railV: null, copper: null },
+    /* ---- Enclosures & 3D-print parts — 10 (passive mechanical parts: copper: null) ---- */
+    { name: "Snap-Fit PCB Enclosure", cat: 3, gen: "enclosure", W: 95, D: 65, fins: 0, finH: 10, dies: 1, power: 8, mat: "fr4", railV: null, copper: null },
+    { name: "Vented Enclosure Lid", cat: 3, gen: "enclosure", W: 120, D: 80, fins: 0, finH: 12, dies: 1, power: 18, mat: "aluminum", railV: null, copper: null },
+    { name: "Wall Mount Bracket", cat: 3, gen: "bracket", W: 110, D: 50, fins: 0, finH: 12, dies: 1, power: 1, mat: "aluminum", railV: null, copper: null },
+    { name: "DIN Rail Mount", cat: 3, gen: "enclosure", W: 105, D: 45, fins: 0, finH: 10, dies: 1, power: 12, mat: "fr4", railV: null, copper: null },
+    { name: "L-Bracket / NEMA-17 Stepper Mount", cat: 3, gen: "bracket", W: 56, D: 56, fins: 0, finH: 10, dies: 1, power: 8, mat: "aluminum", railV: null, copper: null },
+    { name: "Cable Management Clip", cat: 3, gen: "bracket", W: 55, D: 45, fins: 0, finH: 8, dies: 1, power: 1, mat: "aluminum", railV: null, copper: null },
+    { name: "Standoff / Boss Mount", cat: 3, gen: "bracket", W: 60, D: 60, fins: 0, finH: 10, dies: 1, power: 1, mat: "aluminum", railV: null, copper: null },
+    { name: "Raspberry Pi Case", cat: 3, gen: "enclosure", W: 92, D: 62, fins: 0, finH: 10, dies: 1, power: 12, mat: "fr4", railV: null, copper: null },
+    { name: "Control Box / Junction Box", cat: 3, gen: "enclosure", W: 180, D: 120, fins: 0, finH: 14, dies: 1, power: 15, mat: "fr4", railV: null, copper: null },
+    { name: "Ventilation Grille Panel", cat: 3, gen: "enclosure", W: 150, D: 100, fins: 0, finH: 8, dies: 1, power: 5, mat: "aluminum", railV: null, copper: null },
+    /* ---- Robotics parts — 4 (static 3D-printable parts only: copper: null) ---- */
+    { name: "Servo Bracket", cat: 4, gen: "bracket", W: 70, D: 50, fins: 0, finH: 10, dies: 1, power: 1, mat: "aluminum", railV: null, copper: null },
+    { name: "Robot Joint / Hinge", cat: 4, gen: "bracket", W: 90, D: 40, fins: 0, finH: 8, dies: 1, power: 1, mat: "aluminum", railV: null, copper: null },
+    { name: "Gripper Finger", cat: 4, gen: "bracket", W: 80, D: 30, fins: 0, finH: 8, dies: 1, power: 1, mat: "aluminum", railV: null, copper: null },
+    { name: "Limb Segment / Arm Link", cat: 4, gen: "bracket", W: 140, D: 45, fins: 0, finH: 10, dies: 1, power: 1, mat: "aluminum", railV: null, copper: null },
+    /* ---- Quantum showcase — 2 (visual showcase only: copper: null) ---- */
+    { name: "Qubit Chip Array (superconducting)", cat: 5, gen: "chiplet", W: 60, D: 60, fins: 0, finH: 8, dies: 6, power: 5, mat: "copper", showcase: true, railV: null, copper: null },
+    { name: "Cryostat Cold Plate Stage", cat: 5, gen: "heatsink", W: 100, D: 100, fins: 0, finH: 10, dies: 1, power: 10, mat: "copper", showcase: true, railV: null, copper: null }
   ].concat(PROTOFLOW_BOARDS.map(function (b) { return Object.assign({ cat: 6, boardId: b.id }, clone(b)); }));
   PRESETS.forEach(function (p, i) { p.n = i + 1; });
 
@@ -376,9 +424,13 @@
       timId: keep.timId || DESIGN_DEFAULTS.timId,
       mode: keep.mode || "heatsink"
     });
-    ["gen", "W", "D", "fins", "finH", "finT", "baseT", "dies", "power", "powerPeak", "mat", "air", "hForced", "rjc", "srcW", "srcD", "encH", "showcase"].forEach(function (k) {
+    ["gen", "W", "D", "fins", "finH", "finT", "baseT", "dies", "power", "powerPeak", "mat", "air", "hForced", "rjc", "srcW", "srcD", "encH", "showcase", "railV", "copperPartId"].forEach(function (k) {
       if (p[k] !== undefined) d[k] = clone(p[k]);
     });
+    if (Object.prototype.hasOwnProperty.call(p, "copper")) {
+      d.copper = p.copper ? clone(p.copper) : null;
+      if (p.copper === null) d.railV = null;
+    }
     d.pcb = p.pcb ? clone(p.pcb) : null;
     d.presetName = p.name || null;
     d.board = p.boardId || p.id || null;
@@ -902,8 +954,9 @@
   }
   // Which catalog parts make physical sense for the current generator.
   function partAppliesTo(design, part) {
-    if (!part) return false;
+    if (!part || !design) return false;
     const g = design.gen;
+    if (part.kind === "copper") return !!design.copper;
     if (part.kind === "fan") return true;
     if (part.kind === "tim" || part.kind === "package") return g === "heatsink" || g === "chiplet";
     if (part.kind === "heatsink") return g === "heatsink";
@@ -926,6 +979,8 @@
     }
     const fan = d.fanPartId && getPart(d.fanPartId);
     if (fan) lines.push({ item: fan.mfr + " " + fan.mpn, usd: fan.priceUSD });
+    const cuPart = d.copperPartId && getPart(d.copperPartId);
+    if (cuPart) lines.push({ item: cuPart.mfr + " " + cuPart.mpn, usd: cuPart.priceUSD });
     return { totalUSD: lines.reduce(function (s, l) { return s + l.usd; }, 0), lines: lines };
   }
 
@@ -938,20 +993,37 @@
     else if (p.kind === "heatsink") { Object.assign(d, clone(p.apply)); d.heatsinkPartId = p.id; d.mode = "heatsink"; }
     else if (p.kind === "fan") { Object.assign(d, clone(p.apply)); d.fanPartId = p.id; }
     else if (p.kind === "package") Object.assign(d, clone(p.apply));
+    else if (p.kind === "copper") {
+      d.copper = Object.assign({}, d.copper, { copperOz: p.copperOz });
+      if (d.pcb) d.pcb.copperOz = p.copperOz;
+      d.copperPartId = p.id;
+    }
     return sanitizeDesign(d).design;
   }
   function fmtSigned(v, digits) { return (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(digits); }
-  // evaluate(design) -> { tj }  (injected: keeps presets.js solver-free)
+  // evaluate(design) -> { tj, worstIrDropMv?, worstCurrentDensityAmm2? }  (injected: keeps presets.js solver-free)
   function previewSwap(design, partId, evaluate) {
     const before = evaluate(design);
     const next = applyPart(design, partId);
     const after = evaluate(next);
     const bomB = estimateBomUSD(design).totalUSD, bomA = estimateBomUSD(next).totalUSD;
-    const dT = after.tj - before.tj, dUSD = bomA - bomB;
+    const dT = (after && typeof after.tj === "number" && before && typeof before.tj === "number") ? (after.tj - before.tj) : 0;
+    const dUSD = bomA - bomB;
+    const dIr = (after && typeof after.worstIrDropMv === "number" && before && typeof before.worstIrDropMv === "number")
+      ? (after.worstIrDropMv - before.worstIrDropMv) : null;
+    const dJ = (after && typeof after.worstCurrentDensityAmm2 === "number" && before && typeof before.worstCurrentDensityAmm2 === "number")
+      ? (after.worstCurrentDensityAmm2 - before.worstCurrentDensityAmm2) : null;
+    const tjAfter = (after && typeof after.tj === "number") ? after.tj : 0;
+    const tjBefore = (before && typeof before.tj === "number") ? before.tj : 0;
+    const overLimit = tjBefore > 1000 || tjAfter > 1000;
+    const tjStr = tjAfter > 1000
+      ? ">1000 °C — model limit, uncooled bare-die output, not a real temperature"
+      : tjAfter.toFixed(1) + "°C";
+    const dTStr = overLimit ? "model limit" : fmtSigned(dT, 1) + "°C";
     return {
       partId: partId, part: getPart(partId), before: before, after: after, design: next,
-      deltaTj: dT, deltaBomUSD: dUSD,
-      text: "New Tj: " + after.tj.toFixed(1) + "°C (ΔT: " + fmtSigned(dT, 1) + "°C, " + (dUSD >= 0 ? "+" : "−") + "$" + Math.abs(dUSD).toFixed(2) + " BOM)"
+      deltaTj: dT, deltaBomUSD: dUSD, deltaIrDropMv: dIr, deltaCurrentDensityAmm2: dJ,
+      text: "New Tj: " + tjStr + " (ΔT: " + dTStr + ", " + (dUSD >= 0 ? "+" : "−") + "$" + Math.abs(dUSD).toFixed(2) + " BOM)"
     };
   }
   function SwapHistory() { this.prev = null; }
@@ -960,8 +1032,9 @@
   SwapHistory.prototype.undo = function () { const p = this.prev; this.prev = null; return p ? clone(p) : null; };
 
   return {
-    VERSION: "2.0.0",
-    MATERIALS: MATERIALS, PARTS_CATALOG: PARTS_CATALOG, TIM_UPGRADE_ORDER: TIM_UPGRADE_ORDER, getPart: getPart,
+    VERSION: "3.0.0",
+    MATERIALS: MATERIALS, COPPER_OZ_TABLE: COPPER_OZ_TABLE, copperThicknessUm: copperThicknessUm, copperThicknessMm: copperThicknessMm,
+    PARTS_CATALOG: PARTS_CATALOG, TIM_UPGRADE_ORDER: TIM_UPGRADE_ORDER, getPart: getPart,
     FAMOUS_BOARDS: FAMOUS_BOARDS, PROTOFLOW_BOARDS: PROTOFLOW_BOARDS, PRESET_CATS: PRESET_CATS, PRESETS: PRESETS,
     MI300X_OAM_POWER_W: MI300X_OAM_POWER_W, GENERATORS: GENERATORS, DESIGN_DEFAULTS: DESIGN_DEFAULTS, LIMITS: LIMITS,
     MIN_FIN_GAP_MM: MIN_FIN_GAP_MM, PORT_TYPES: PORT_TYPES, DEFAULT_PCB: DEFAULT_PCB,
