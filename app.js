@@ -1,12 +1,13 @@
-// SolidSay v2 Integrated Application Controller
+// SolidSay v3 Integrated Application Controller
 "use strict";
 
 (function () {
   const P = window.SolidSayPresets;
   const T = window.SolidSayThermal;
+  const EL = window.SolidSayElectrical;
   const E = window.SolidSayExporters;
 
-  if (!P || !T || !E) {
+  if (!P || !T || !EL || !E) {
     console.error("SolidSay core modules missing!");
     return;
   }
@@ -17,9 +18,15 @@
 
   // Application State
   const S = P.clone(P.DESIGN_DEFAULTS);
-  let RESULT = null, BARE_RESULT = null;
+  let RESULT = null, ELEC_RESULT = null, BARE_RESULT = null;
+  let viewFieldMode = "thermal"; // "thermal" | "electrical" | "both"
   let lastManifold = null;
   const swapHistory = new P.SwapHistory();
+
+  function replaceStateInPlace(target, nextDesign) {
+    Object.keys(target).forEach(k => { delete target[k]; });
+    Object.assign(target, P.clone(nextDesign));
+  }
 
   // Ring Buffer for Simulation States (last 10 states)
   const STATE_HISTORY_KEY = "solidsay_state_ring_v2";
@@ -127,7 +134,7 @@
       camDist = Math.min(700, Math.max(90, camDist + e.deltaY * 0.4));
     }, { passive: false });
 
-    // Click / Tap 3D Temperature Inspection (Measure Probe)
+    // Click / Tap 3D Surface Inspection (Measure Probe)
     holder.addEventListener("click", function (e) {
       if (drag) return;
       const rect = holder.getBoundingClientRect();
@@ -142,10 +149,12 @@
         probeMarker.position.copy(pt);
         probeMarker.visible = true;
         const temp = T.sampleTemperature(RESULT, pt.x, pt.z);
+        const jVal = (ELEC_RESULT && ELEC_RESULT.hasPowerDelivery) ? EL.sampleCurrentDensity(ELEC_RESULT, pt.x, pt.z) : null;
         const probeChip = $("#hudProbeChip");
         if (probeChip && temp !== null) {
           probeChip.hidden = false;
-          $("#hudProbe").textContent = `📍 X: ${pt.x.toFixed(1)}mm, Y: ${pt.z.toFixed(1)}mm · ${T.formatPeakTjShort(temp)}`;
+          const jTxt = jVal !== null ? ` · ${EL.formatCurrentDensityShort(jVal)}` : "";
+          $("#hudProbe").textContent = `📍 X: ${pt.x.toFixed(1)}mm, Y: ${pt.z.toFixed(1)}mm · ${T.formatPeakTjShort(temp)}${jTxt}`;
         }
       }
     });
@@ -162,6 +171,19 @@
       camera.lookAt(0, 8, 0);
       renderer.render(scene, camera);
     })();
+  }
+
+  function cellFieldColor(tempVal, jVal, tLo, tHi, jHi) {
+    const hasEl = ELEC_RESULT && ELEC_RESULT.hasPowerDelivery && jVal !== null && isFinite(jVal);
+    if (viewFieldMode === "electrical" && hasEl) {
+      return EL.elecColor(jVal, 0, jHi);
+    }
+    if (viewFieldMode === "both" && hasEl) {
+      const ct = T.tempColor(tempVal, tLo, tHi);
+      const ce = EL.elecColor(jVal, 0, jHi);
+      return [0.52 * ct[0] + 0.48 * ce[0], 0.52 * ct[1] + 0.48 * ce[1], 0.52 * ct[2] + 0.48 * ce[2]];
+    }
+    return T.tempColor(tempVal, tLo, tHi);
   }
 
   function rebuildScene() {
@@ -183,6 +205,9 @@
 
     const mesh = P.buildDesignMesh(S);
     const lo = S.amb, hi = Math.max(RESULT.peak, S.amb + 5);
+    const jHi = (ELEC_RESULT && ELEC_RESULT.hasPowerDelivery)
+      ? Math.max(EL.CURRENT_DENSITY_LIMIT_AMM2, ELEC_RESULT.worstCurrentDensityAmm2, 1)
+      : EL.CURRENT_DENSITY_LIMIT_AMM2;
 
     mesh.shells.forEach(shell => {
       const geo = new THREE.BufferGeometry();
@@ -203,7 +228,7 @@
       partGroup.add(m);
     });
 
-    // Heatmap skin on top of the heat-dissipating surface
+    // Heatmap / Current-Density skin on top of the active surface
     const gridN = RESULT.nx || 32;
     const seg = gridN - 1;
     const pg = new THREE.PlaneGeometry(S.W, S.D, seg, seg);
@@ -213,7 +238,8 @@
     for (let i = 0; i < posAttr.count; i++) {
       const x = posAttr.getX(i), z = posAttr.getY(i);
       const temp = T.sampleTemperature(RESULT, x, -z);
-      const c = T.tempColor(temp !== null ? temp : S.amb, lo, hi);
+      const jVal = (ELEC_RESULT && ELEC_RESULT.hasPowerDelivery) ? EL.sampleCurrentDensity(ELEC_RESULT, x, -z) : null;
+      const c = cellFieldColor(temp !== null ? temp : S.amb, jVal, lo, hi, jHi);
       colors[i * 3] = c[0];
       colors[i * 3 + 1] = c[1];
       colors[i * 3 + 2] = c[2];
@@ -238,23 +264,31 @@
     $("#statTj").textContent = T.formatPeakTj(tj);
     $("#statTj").className = "v " + (tj > 100 ? "bad" : (tj > 80 ? "" : "ok"));
     $("#statTheta").textContent = RESULT.thetaJA.toFixed(2) + " °C/W";
-    $("#statMs").textContent = RESULT.ms.toFixed(1) + " ms";
+    const totalMs = RESULT.ms + (ELEC_RESULT && isFinite(ELEC_RESULT.ms) ? ELEC_RESULT.ms : 0);
+    $("#statMs").textContent = totalMs.toFixed(1) + " ms";
 
-    // Per-design verification badge (P0-1): shows THIS design's real local
-    // residual (max-cell FD residual as % of total power) and the measured
-    // solve time for this solve. The old static "Verified (<3% Residual)"
-    // cited the energy balance, which the solver forces to ~0 by
-    // construction and therefore proves nothing; the "(<50ms)" half was
-    // also violated in the browser (63.6/68.3 ms observed). If the solve
-    // did not converge or no finite residual exists, show NO verification
-    // claim at all — just the (true) on-device / zero-cloud fact.
+    // HUD Electrical chip
+    const hudElec = $("#hudElec");
+    if (hudElec && ELEC_RESULT) {
+      if (ELEC_RESULT.hasPowerDelivery) {
+        hudElec.textContent = ELEC_RESULT.worstIrDropShort + " · " + ELEC_RESULT.worstCurrentDensityShort + " (" + ELEC_RESULT.status + ")";
+        hudElec.className = ELEC_RESULT.pass ? "cool" : "hot";
+      } else {
+        hudElec.textContent = EL.NO_POWER_MESSAGE;
+        hudElec.className = "";
+      }
+    }
+
+    // Per-design verification badge: shows THIS design's real local PDE / KCL
+    // residuals and the measured solve time for this solve.
     const badgeEl = $("#localBadgeText");
     if (badgeEl) {
       if (RESULT.converged && isFinite(RESULT.localResidual)) {
-        const msTxt = isFinite(RESULT.ms) ? RESULT.ms.toFixed(1) + " ms" : "—";
-        badgeEl.textContent = "🟢 100% On-Device Solve · 0 Cloud Calls · Local residual " + (RESULT.localResidual * 100).toFixed(4) + "% ✓ · " + msTxt;
+        const msTxt = isFinite(totalMs) ? totalMs.toFixed(1) + " ms" : "—";
+        const hasEl = ELEC_RESULT && ELEC_RESULT.hasPowerDelivery && isFinite(ELEC_RESULT.localResidual);
+        badgeEl.textContent = "🟢 100% On-Device · 0 Cloud Calls · Thermal residual " + (RESULT.localResidual * 100).toFixed(4) + "%" + (hasEl ? " · Electrical residual " + (ELEC_RESULT.localResidual * 100).toFixed(4) + "%" : "") + " ✓ · " + msTxt;
       } else {
-        badgeEl.textContent = "🟢 100% On-Device Solve · 0 Cloud Calls";
+        badgeEl.textContent = "🟢 100% On-Device · 0 Cloud Calls";
       }
     }
 
@@ -263,8 +297,20 @@
     $("#bigTempLabel").textContent = (S.showcase ? "Showcase · room-temp demo only · " : "Peak junction · ") + S.power + " W · " + P.MATERIALS[S.mat].label;
     $("#hotBanner").classList.toggle("show", tj > 100);
 
-    $("#legendLo").textContent = S.amb.toFixed(0) + "°";
-    $("#legendHi").textContent = (tj > T.TJ_MODEL_LIMIT_C ? ">1000" : Math.max(tj, S.amb + 5).toFixed(0)) + "°";
+    const jHi = (ELEC_RESULT && ELEC_RESULT.hasPowerDelivery)
+      ? Math.max(EL.CURRENT_DENSITY_LIMIT_AMM2, ELEC_RESULT.worstCurrentDensityAmm2, 1)
+      : EL.CURRENT_DENSITY_LIMIT_AMM2;
+
+    if (viewFieldMode === "electrical" && ELEC_RESULT && ELEC_RESULT.hasPowerDelivery) {
+      $("#legendLo").textContent = "0 A/mm²";
+      $("#legendHi").textContent = EL.formatCurrentDensityShort(jHi);
+    } else if (viewFieldMode === "both" && ELEC_RESULT && ELEC_RESULT.hasPowerDelivery) {
+      $("#legendLo").textContent = S.amb.toFixed(0) + "° / 0A";
+      $("#legendHi").textContent = (tj > T.TJ_MODEL_LIMIT_C ? ">1000°" : Math.max(tj, S.amb + 5).toFixed(0) + "°") + " / " + EL.formatCurrentDensityShort(jHi);
+    } else {
+      $("#legendLo").textContent = S.amb.toFixed(0) + "°";
+      $("#legendHi").textContent = (tj > T.TJ_MODEL_LIMIT_C ? ">1000" : Math.max(tj, S.amb + 5).toFixed(0)) + "°";
+    }
 
     // Bare die comparison
     const chip = $("#hudDeltaChip");
@@ -282,19 +328,72 @@
       chip.hidden = true;
     }
 
-    // 2D Thermal Grid Canvas
+    // 2D Field Grid Canvas (Thermal / Electrical / Both)
     const cv = $("#grid2d"), ctx = cv.getContext("2d");
     const gridN = RESULT.nx || 32;
     const img = ctx.createImageData(gridN, gridN);
     const hi = Math.max(tj, S.amb + 5);
+    const hasEl = ELEC_RESULT && ELEC_RESULT.hasPowerDelivery && ELEC_RESULT.jGrid;
     for (let i = 0; i < gridN * gridN; i++) {
-      const c = T.tempColor(RESULT.grid[i], S.amb, hi);
+      const jVal = hasEl ? ELEC_RESULT.jGrid[i] : null;
+      const c = cellFieldColor(RESULT.grid[i], jVal, S.amb, hi, jHi);
       img.data[i * 4] = c[0] * 255;
       img.data[i * 4 + 1] = c[1] * 255;
       img.data[i * 4 + 2] = c[2] * 255;
       img.data[i * 4 + 3] = 255;
     }
     ctx.putImageData(img, 0, 0);
+
+    // Power-Integrity Screener Panel Readouts
+    const nullNotice = $("#elecNullNotice");
+    const activeControls = $("#elecActiveControls");
+    if (ELEC_RESULT && !ELEC_RESULT.hasPowerDelivery) {
+      if (nullNotice) {
+        nullNotice.hidden = false;
+        nullNotice.textContent = EL.NO_POWER_MESSAGE;
+      }
+      if (activeControls) activeControls.style.display = "none";
+    } else if (ELEC_RESULT && ELEC_RESULT.hasPowerDelivery) {
+      if (nullNotice) nullNotice.hidden = true;
+      if (activeControls) activeControls.style.display = "flex";
+      const irEl = $("#statIrDrop");
+      if (irEl) {
+        const irPctTxt = (ELEC_RESULT.worstIrDropMv > ELEC_RESULT.railV * 1000)
+          ? " (>100% of rail — model limit)"
+          : " (" + ELEC_RESULT.worstIrDropPct.toFixed(2) + "%)";
+        irEl.textContent = ELEC_RESULT.worstIrDropDisplay + irPctTxt;
+        irEl.className = "v " + (ELEC_RESULT.irDropFlag ? "bad" : "ok");
+      }
+      const irLimEl = $("#statIrLimit");
+      if (irLimEl) {
+        irLimEl.textContent = "Threshold: <= " + ELEC_RESULT.irDropLimitPct.toFixed(1) + "% of " + ELEC_RESULT.railV.toFixed(1) + " V rail (" + ELEC_RESULT.irDropLimitMv.toFixed(0) + " mV)";
+      }
+      const jEl = $("#statCurrDensity");
+      if (jEl) {
+        jEl.textContent = ELEC_RESULT.worstCurrentDensityDisplay;
+        jEl.className = "v " + (ELEC_RESULT.currentDensityFlag ? "bad" : "ok");
+      }
+      const jLimEl = $("#statJLimit");
+      if (jLimEl) {
+        jLimEl.textContent = "Threshold: <= " + ELEC_RESULT.currentDensityLimitAmm2.toFixed(1) + " A/mm² (A = " + ELEC_RESULT.copper.crossSectionMm2.toFixed(4) + " mm²)";
+      }
+      const stEl = $("#statElecStatus");
+      if (stEl) {
+        stEl.textContent = ELEC_RESULT.pass ? "✓ PASS" : "⚠ FLAG";
+        stEl.className = "v " + (ELEC_RESULT.pass ? "ok" : "bad");
+      }
+      const resEl = $("#statElecRes");
+      if (resEl) {
+        resEl.textContent = "Local KCL res " + (ELEC_RESULT.localResidual * 100).toFixed(4) + "% · " + ELEC_RESULT.ms.toFixed(1) + " ms";
+      }
+      const threshEl = $("#elecThresholdsText");
+      if (threshEl) {
+        threshEl.textContent =
+          "Active thresholds: IR drop > 5.0% of " + ELEC_RESULT.railV.toFixed(1) + " V rail (" + ELEC_RESULT.irDropLimitMv.toFixed(0) + " mV) = FLAG · " +
+          "Current density > 20.0 A/mm² (A = W × t_copper = " + ELEC_RESULT.copper.traceWidthMm.toFixed(1) + " mm × " + ELEC_RESULT.copper.thicknessUm.toFixed(1) + " µm = " +
+          ELEC_RESULT.copper.crossSectionMm2.toFixed(4) + " mm² at " + ELEC_RESULT.copper.copperOz + " oz) = FLAG.";
+      }
+    }
 
     // Manifold check
     const mesh = P.buildDesignMesh(S);
@@ -310,7 +409,9 @@
 
   let solveQueued = false;
   function refresh(fromHash) {
+    // Sequential coupled solve: thermal first, then electrical using RESULT's temperature field
     RESULT = T.solveThermal(S);
+    ELEC_RESULT = EL.solveElectrical(S, RESULT);
     rebuildScene();
     updateReadouts();
     syncControls();
@@ -335,7 +436,8 @@
     try {
       const data = {
         g: S.gen, W: S.W, D: S.D, f: S.fins, fh: S.finH, ft: S.finT, bt: S.baseT, di: S.dies,
-        p: S.power, a: S.amb, air: S.air, m: S.mat, md: S.mode, b: S.board, tim: S.timId
+        p: S.power, a: S.amb, air: S.air, m: S.mat, md: S.mode, b: S.board, tim: S.timId,
+        rv: S.railV, cu: S.copper
       };
       history.replaceState(null, "", "#" + btoa(unescape(encodeURIComponent(JSON.stringify(data)))));
     } catch (e) {}
@@ -360,6 +462,9 @@
       if (d.md) S.mode = d.md;
       if (d.b !== undefined) S.board = d.b;
       if (d.tim) S.timId = d.tim;
+      if (d.rv !== undefined) S.railV = d.rv;
+      if (d.cu !== undefined) S.copper = d.cu;
+      replaceStateInPlace(S, P.sanitizeDesign(S).design);
       return true;
     } catch (e) {
       return false;
@@ -381,10 +486,19 @@
     $("#inPower").value = S.power; $("#outPower").textContent = S.power + " W";
     $("#inAmb").value = S.amb; $("#outAmb").textContent = S.amb + " °C";
 
+    if (S.copper && $("#inTraceW")) {
+      $("#inTraceW").value = S.copper.traceWidthMm;
+      $("#outTraceW").textContent = S.copper.traceWidthMm.toFixed(1) + " mm";
+      segSync("copperSwapSeg", "oz", S.copper.copperOz);
+    }
+    const undoBtn = $("#copperUndoBtn");
+    if (undoBtn) undoBtn.disabled = !swapHistory.canUndo();
+
     segSync("genSeg", "gen", S.gen);
     segSync("modeSeg", "mode", S.mode);
     segSync("matSeg", "mat", S.mat);
     segSync("airSeg", "air", S.air);
+    segSync("viewFieldSeg", "field", viewFieldMode);
 
     $("#finFields").style.display = (S.gen === "heatsink" || S.gen === "chiplet") ? "" : "none";
     $("#diesField").hidden = S.gen !== "chiplet";
@@ -416,7 +530,7 @@
     const msg = $("#optMsg");
     const opt = T.autoOptimizeToTarget(S, { targetC: 80, timeBudgetMs: 120 });
     if (opt.feasible) {
-      Object.assign(S, opt.design);
+      replaceStateInPlace(S, opt.design);
       refresh(false);
       msg.textContent = `Done — Tj is now ${T.formatPeakTjShort(opt.proposedTj)}. Changes: ${opt.steps.join(" · ") || "none needed"}. (FD-verified)`;
     } else {
@@ -442,6 +556,17 @@
     setTimeout(() => URL.revokeObjectURL(a.href), 4000);
   }
 
+  // Evaluate helper for P.previewSwap (couples thermal + electrical)
+  function evaluateDesign(d) {
+    const tr = T.solveThermal(d);
+    const er = EL.solveElectrical(d, tr);
+    return {
+      tj: tr.peak,
+      worstIrDropMv: er.worstIrDropMv,
+      worstCurrentDensityAmm2: er.worstCurrentDensityAmm2
+    };
+  }
+
   // Wiring up user interactions
   function init() {
     initGL();
@@ -459,7 +584,7 @@
       btn.title = b.note;
       btn.addEventListener("click", function () {
         const d = P.designFromPreset(b, S);
-        Object.assign(S, d);
+        replaceStateInPlace(S, d);
         refresh(false);
       });
       pills.appendChild(btn);
@@ -484,7 +609,7 @@
       const p = P.PRESETS[+sel.value];
       if (p) {
         const d = P.designFromPreset(p, S);
-        Object.assign(S, d);
+        replaceStateInPlace(S, d);
         refresh(false);
       }
     });
@@ -508,6 +633,48 @@
     bind("#inW", "W"); bind("#inD", "D"); bind("#inFins", "fins"); bind("#inFinH", "finH");
     bind("#inDies", "dies"); bind("#inPower", "power"); bind("#inAmb", "amb");
 
+    if ($("#inTraceW")) {
+      $("#inTraceW").addEventListener("input", function (e) {
+        if (!S.copper) return;
+        S.copper.traceWidthMm = +e.target.value;
+        queueRefresh();
+      });
+    }
+
+    // Copper weight swap (0.5 oz / 1 oz / 2 oz) + single-step Undo
+    $$("#copperSwapSeg button").forEach(btn => {
+      btn.addEventListener("click", function () {
+        if (!S.copper) return;
+        const partId = btn.dataset.part;
+        const preview = P.previewSwap(S, partId, evaluateDesign);
+        const committed = swapHistory.commit(S, preview.design);
+        replaceStateInPlace(S, committed);
+        refresh(false);
+        const maxMv = (S.railV || 5) * 1000;
+        const irOver = (preview.before && preview.before.worstIrDropMv > maxMv) || (preview.after && preview.after.worstIrDropMv > maxMv);
+        const jOver = (preview.before && preview.before.worstCurrentDensityAmm2 > 500) || (preview.after && preview.after.worstCurrentDensityAmm2 > 500);
+        const dIr = irOver ? "(model limit)" : (preview.deltaIrDropMv !== null ? (preview.deltaIrDropMv >= 0 ? "+" : "−") + Math.abs(preview.deltaIrDropMv).toFixed(2) + " mV" : "0 mV");
+        const dJ  = jOver ? "(model limit)" : (preview.deltaCurrentDensityAmm2 !== null ? (preview.deltaCurrentDensityAmm2 >= 0 ? "+" : "−") + Math.abs(preview.deltaCurrentDensityAmm2).toFixed(2) + " A/mm²" : "0 A/mm²");
+        const msgEl = $("#copperSwapMsg");
+        if (msgEl) {
+          msgEl.textContent = `Swapped to ${preview.part.copperOz} oz (${preview.part.tUm} µm) · ΔIR: ${dIr} · ΔJ: ${dJ} · ${preview.text}`;
+        }
+      });
+    });
+
+    if ($("#copperUndoBtn")) {
+      $("#copperUndoBtn").addEventListener("click", function () {
+        const prev = swapHistory.undo();
+        if (!prev) return;
+        replaceStateInPlace(S, prev);
+        refresh(false);
+        const msgEl = $("#copperSwapMsg");
+        if (msgEl && S.copper) {
+          msgEl.textContent = `Undone — restored ${S.copper.copperOz} oz (${P.copperThicknessUm(S.copper.copperOz)} µm) copper stackup.`;
+        }
+      });
+    }
+
     // Segments
     const segBind = (id, attr, key) => {
       $$("#" + id + " button").forEach(b => {
@@ -522,9 +689,35 @@
     segBind("matSeg", "mat", "mat");
     segBind("airSeg", "air", "air");
 
+    // Field map view toggle (Thermal / Electrical / Both)
+    $$("#viewFieldSeg button").forEach(b => {
+      b.addEventListener("click", function () {
+        viewFieldMode = b.dataset.field || "thermal";
+        rebuildScene();
+        updateReadouts();
+        syncControls();
+      });
+    });
+
     // Auto-optimize triggers
     $("#autoOptBtn").addEventListener("click", autoOptimize);
     $("#autoOptBtn2").addEventListener("click", autoOptimize);
+
+    // Viewport controls
+    if ($("#localBadge")) {
+      $("#localBadge").addEventListener("click", () => openModal("#airgapModal"));
+    }
+    if ($("#spinBtn")) {
+      $("#spinBtn").addEventListener("click", function () {
+        autoRotate = !autoRotate;
+        this.setAttribute("aria-pressed", autoRotate ? "true" : "false");
+      });
+    }
+    if ($("#resetCamBtn")) {
+      $("#resetCamBtn").addEventListener("click", function () {
+        camAz = 0.7; camEl = 0.85; camDist = Math.max(S.W, S.D) * 2.6;
+      });
+    }
 
     // Viewport Mode Switcher
     $("#viewModeTop").addEventListener("click", function () {
@@ -554,7 +747,8 @@
       variants[key] = {
         name: S.presetName || S.gen,
         design: P.clone(S),
-        result: P.clone(RESULT)
+        result: P.clone(RESULT),
+        elecResult: P.clone(ELEC_RESULT)
       };
       updateCompareTable();
     }
@@ -564,11 +758,13 @@
 
     function updateCompareTable() {
       let html = `<table style="width:100%; border-collapse:collapse; font-size:13px; font-family:var(--mono);">`;
-      html += `<tr style="border-bottom:1px solid var(--line);"><th>Variant</th><th>Name</th><th>Footprint</th><th>Fins</th><th>Power</th><th>Peak Tj</th><th>θJA</th></tr>`;
+      html += `<tr style="border-bottom:1px solid var(--line);"><th>Variant</th><th>Name</th><th>Footprint</th><th>Power</th><th>Peak Tj</th><th>IR Drop</th><th>Max J</th></tr>`;
       ["A", "B", "C"].forEach(k => {
         const v = variants[k];
         if (v) {
-          html += `<tr><td><b>${k}</b></td><td>${v.name}</td><td>${v.design.W}×${v.design.D}mm</td><td>${v.design.fins}</td><td>${v.design.power}W</td><td>${T.formatPeakTjShort(v.result.peak)}</td><td>${v.result.thetaJA.toFixed(2)}°C/W</td></tr>`;
+          const irTxt = (v.elecResult && v.elecResult.hasPowerDelivery) ? v.elecResult.worstIrDropShort : "—";
+          const jTxt  = (v.elecResult && v.elecResult.hasPowerDelivery) ? v.elecResult.worstCurrentDensityShort : "—";
+          html += `<tr><td><b>${k}</b></td><td>${v.name}</td><td>${v.design.W}×${v.design.D}mm</td><td>${v.design.power}W</td><td>${T.formatPeakTjShort(v.result.peak)}</td><td>${irTxt}</td><td>${jTxt}</td></tr>`;
         } else {
           html += `<tr><td><b>${k}</b></td><td colspan="6" style="color:var(--dim);">Empty (click Save as Variant ${k})</td></tr>`;
         }
@@ -610,6 +806,8 @@
             components: parsed.components
           });
           S.power = parsed.components.reduce((s, c) => s + c.power, 0);
+          S.railV = S.railV || 12.0;
+          S.copper = S.copper || { traceWidthMm: 5, copperOz: 1, layers: 4, vias: 100 };
           S.presetName = file.name.replace(/\.[^/.]+$/, "");
           $("#kicadMsg").textContent = `✓ Loaded ${file.name}: ${parsed.W}×${parsed.D}mm, ${parsed.components.length} components.`;
           refresh(false);
@@ -638,36 +836,22 @@
     });
 
     $("#expPdf").addEventListener("click", function () {
-      const pdf = E.generatePDFReport(S, RESULT, BARE_RESULT);
+      const pdf = E.generatePDFReport(S, RESULT, BARE_RESULT, ELEC_RESULT);
       if (pdf && pdf.pdfBlob) {
         downloadBlob(pdf.pdfBlob, "solidsay-thermal-audit.pdf");
-        $("#exportMsg").textContent = "Thermal audit PDF downloaded.";
+        $("#exportMsg").textContent = "Thermal & power-integrity audit PDF downloaded.";
       }
     });
 
     $("#expCtm").addEventListener("click", function () {
-      const ctm = E.exportCTM(S, RESULT);
+      const ctm = E.exportCTM(S, RESULT, ELEC_RESULT);
       const jsonStr = JSON.stringify(ctm, null, 2);
       downloadBlob(new Blob([jsonStr], { type: "application/json" }), "solidsay-ctm.json");
-      $("#exportMsg").textContent = "Compact Thermal Model (CTM-JSON) downloaded.";
+      $("#exportMsg").textContent = "Compact Thermal & Power-Integrity Model (CTM-JSON) downloaded.";
     });
 
     $("#expGist").addEventListener("click", function () {
-      const snapshot = {
-        app: "SolidSay v2 ProtoFlow",
-        timestamp: new Date().toISOString(),
-        design: S,
-        result: {
-          peakTj: RESULT.peak,
-          thetaJA: RESULT.thetaJA,
-          converged: RESULT.converged,
-          // Local residual (max-cell FD residual vs total power) — the real
-          // convergence number. RESULT.residual is the energy-balance error,
-          // which the solver forces to ~0 by construction; it must never be
-          // cited as convergence proof, so it is not recorded here.
-          localResidual: RESULT.localResidual
-        }
-      };
+      const snapshot = E.exportGistSnapshot(S, RESULT, ELEC_RESULT);
       const json = JSON.stringify(snapshot, null, 2);
       navigator.clipboard.writeText(json).then(() => {
         alert("Snapshot JSON copied to clipboard! Ready to paste into GitHub Gist.");

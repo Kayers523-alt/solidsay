@@ -214,7 +214,7 @@
 <header class="topbar">
   <div class="brand">
     <b>Solid<span>Say</span></b>
-    <span class="tag">v2 ProtoFlow Engine</span>
+    <span class="tag">v3 Power-Integrity Engine</span>
   </div>
   <div class="spacer"></div>
   <button class="badge-local" id="localBadge" type="button" aria-haspopup="dialog">
@@ -232,19 +232,20 @@
   <section class="viewport" aria-label="3D thermal viewport">
     <div id="gl"></div>
 
-    <div class="mode-switcher" style="position:absolute; top:56px; left:10px; display:flex; gap:6px; z-index:10; flex-wrap:wrap;">
+    <div class="mode-switcher" style="position:absolute; top:56px; left:10px; display:flex; gap:6px; z-index:10; flex-wrap:wrap; max-width:calc(100vw - 20px);">
       <button class="btn small mode-pill" id="viewModeTop" type="button" aria-pressed="false">Top View</button>
       <button class="btn small mode-pill" id="viewModeBottom" type="button" aria-pressed="false">Mirrored Bottom PCB View</button>
       <button class="btn small mode-pill" id="viewModeStackup" type="button" aria-pressed="false">Thermal Stackup Rth</button>
       <button class="btn small mode-pill" id="viewModeCompare" type="button" aria-pressed="false">Compare Variants (A/B/C)</button>
     </div>
 
-    <div class="gl-fallback" id="glFallback">The 3D view needs WebGL. The thermal solver below still runs — check the 2D grid in the Thermal tab.</div>
+    <div class="gl-fallback" id="glFallback">The 3D view needs WebGL. The thermal &amp; electrical solvers below still run — check the 2D grid in the Thermal tab.</div>
     <div class="hud">
       <div class="chip">Peak Tj <b id="hudTj">—</b></div>
       <div class="chip">θJA (junction → ambient) <b id="hudTheta">—</b></div>
+      <div class="chip" id="hudElecChip">IR drop · Current density <b id="hudElec" style="font-size:15px;">—</b></div>
       <div class="chip delta" id="hudDeltaChip" hidden>Bare die vs heatsink <b id="hudDelta">—</b></div>
-      <div class="chip" id="hudProbeChip" hidden>3D Temperature Probe <b id="hudProbe">—</b></div>
+      <div class="chip" id="hudProbeChip" hidden>3D Surface Probe <b id="hudProbe">—</b></div>
     </div>
     <div class="view-tools">
       <button class="btn" id="spinBtn" type="button" aria-pressed="false">Auto-rotate</button>
@@ -254,14 +255,14 @@
       <div class="t" id="bigTemp">—</div>
       <div class="l" id="bigTempLabel">Peak junction temperature</div>
     </div>
-    <div class="legend"><span id="legendLo">25°</span><span class="bar"></span><span id="legendHi">100°</span></div>
+    <div class="legend"><span id="legendLo">25°</span><span class="bar" id="legendBar"></span><span id="legendHi">100°</span></div>
   </section>
 
   <aside class="panel">
     <nav class="tabs" role="tablist" aria-label="Sandbox controls">
       <button class="tab" role="tab" id="tabbtn-boards" aria-controls="tab-boards" aria-selected="true" data-tab="boards" type="button">Boards</button>
       <button class="tab" role="tab" id="tabbtn-design" aria-controls="tab-design" aria-selected="false" data-tab="design" type="button">Design</button>
-      <button class="tab" role="tab" id="tabbtn-thermal" aria-controls="tab-thermal" aria-selected="false" data-tab="thermal" type="button">Thermal</button>
+      <button class="tab" role="tab" id="tabbtn-thermal" aria-controls="tab-thermal" aria-selected="false" data-tab="thermal" type="button">Thermal &amp; PDN</button>
       <button class="tab" role="tab" id="tabbtn-export" aria-controls="tab-export" aria-selected="false" data-tab="export" type="button">Export &amp; Plans</button>
     </nav>
     <div class="tabbody">
@@ -280,7 +281,7 @@
           <div style="display:flex; gap:10px; margin-top:10px; flex-wrap:wrap;">
             <button class="btn primary" id="promptBuildBtn" type="button" style="flex:1 1 160px;">Build from description</button>
           </div>
-          <p class="note" id="promptMsg" style="margin-top:10px;">Understands board names (Raspberry Pi 5, ESP32, Orin Nano, MI300X, NEMA-17), dimensions in mm, fin counts, and power in watts. Rebuilds in under 50&nbsp;ms — timed below.</p>
+          <p class="note" id="promptMsg" style="margin-top:10px;">Understands board names (Raspberry Pi 5, ESP32, Orin Nano, MI300X, NEMA-17), dimensions in mm, fin counts, and power in watts. Rebuilds locally on your device — measured solve time shown below.</p>
         </div>
         <div>
           
@@ -295,11 +296,11 @@
 
         <h2>Preset library — hardware only</h2>
           <div class="field">
-            <label for="presetSelect">46 presets: chips, boards, cooling, enclosures, robotics parts</label>
+            <label for="presetSelect">50 presets: chips, boards, cooling, enclosures, robotics &amp; ProtoFlow boards</label>
             <select id="presetSelect"></select>
           </div>
           <button class="btn" id="presetApplyBtn" type="button" style="margin-top:10px; width:100%;">Load preset</button>
-          <p class="note" id="presetNote" style="margin-top:10px;">Grouped as: Microchip &amp; packaging (12) · Circuit boards &amp; power (10) · Cooling (8) · Enclosures &amp; 3D-print parts (10) · Robotics parts (4) · Quantum showcase (2). Each preset maps onto one of the four parametric generators — heatsink, enclosure, chiplet package, or bracket — so every one stays thermally simulatable.</p>
+          <p class="note" id="presetNote" style="margin-top:10px;">Grouped as: Microchip &amp; packaging (12) · Circuit boards &amp; power (10) · Cooling (8) · Enclosures &amp; 3D-print parts (10) · Robotics parts (4) · Quantum showcase (2) · ProtoFlow high-heat boards (4). Passive cooling/mechanical parts carry <span class="mono">copper: null</span> ("no power delivery in this part").</p>
         </div>
       </section>
 
@@ -357,7 +358,7 @@
         </div>
       </section>
 
-      <!-- ================= THERMAL ================= -->
+      <!-- ================= THERMAL & POWER-INTEGRITY ================= -->
       <section class="tabpage" id="tab-thermal" role="tabpanel" aria-labelledby="tabbtn-thermal">
         <div class="grid2">
           <div class="field">
@@ -385,16 +386,73 @@
           </div>
         </div>
         <div>
-          <h2>Solver — 32 × 32 finite difference</h2>
+          <h2>Field map view — Thermal / Electrical / Both</h2>
+          <div class="seg" id="viewFieldSeg" role="group" aria-label="Field map view toggle">
+            <button type="button" data-field="thermal" aria-pressed="true">Thermal (°C)</button>
+            <button type="button" data-field="electrical" aria-pressed="false">Electrical (A/mm²)</button>
+            <button type="button" data-field="both" aria-pressed="false">Both (T + J)</button>
+          </div>
+        </div>
+        <div>
+          <h2>Thermal solver — 32 × 32 finite difference</h2>
           <div class="stat-row">
             <div class="stat"><div class="k">Peak Tj</div><div class="v" id="statTj">—</div></div>
             <div class="stat"><div class="k">θJA</div><div class="v" id="statTheta">—</div></div>
             <div class="stat"><div class="k">Solve time</div><div class="v" id="statMs">—</div></div>
           </div>
-          <canvas id="grid2d" width="32" height="32" style="margin-top:12px;" aria-label="Top-down 32 by 32 thermal grid"></canvas>
-          <p class="note" style="margin-top:8px;">Steady-state finite-difference with successive over-relaxation, solved coarse-to-fine (8→16→32) until heat out balances power in within 3% — the convergence check a single-pass solver fails. Simplified conduction + convection model — a fast design guide, not a substitute for CFD or FEA sign-off.</p>
+          <canvas id="grid2d" width="32" height="32" style="margin-top:12px;" aria-label="Top-down 32 by 32 field grid"></canvas>
+          <p class="note" style="margin-top:8px;">Steady-state 32×32 finite-difference thermal solver (coarse-to-fine 8→16→32 with SOR) + temperature-coupled 2D nodal DC IR-drop solver (+0.393%/°C), checked against per-design local PDE and KCL residuals. Fast design screener — not a substitute for 3D CFD/FEA or Ansys SIwave / HyperLynx sign-off.</p>
           <button class="btn" id="autoOptBtn2" type="button" style="width:100%; margin-top:6px;">Auto-Optimize Heatsink (target Tj &lt; 80 °C)</button>
           <p class="note" id="optMsg" style="margin-top:8px;"></p>
+        </div>
+
+        <div id="elecSection" style="border-top:1px solid var(--line); padding-top:14px;">
+          <h2>2D DC Power-Integrity Screener (IR Drop &amp; Current Density)</h2>
+          <p class="note" id="elecDisclaimer" style="margin-bottom:10px;">Fast DC resistive screener (2D nodal analysis on copper geometry, temperature-coupled +0.393%/°C) — not an Ansys SIwave / HyperLynx PDN sign-off tool.</p>
+
+          <div id="elecNullNotice" class="stat" hidden style="border-color:var(--line); color:var(--dim); font-family:var(--mono); font-size:13.5px;">
+            no power delivery in this part
+          </div>
+
+          <div id="elecActiveControls" style="display:flex; flex-direction:column; gap:12px;">
+            <div class="stat-row">
+              <div class="stat">
+                <div class="k">Worst IR drop</div>
+                <div class="v" id="statIrDrop">—</div>
+                <div class="k" id="statIrLimit" style="margin-top:4px; text-transform:none;">Flag &gt; 5.0% of rail</div>
+              </div>
+              <div class="stat">
+                <div class="k">Worst J (A/mm²)</div>
+                <div class="v" id="statCurrDensity">—</div>
+                <div class="k" id="statJLimit" style="margin-top:4px; text-transform:none;">Flag &gt; 20.0 A/mm²</div>
+              </div>
+              <div class="stat">
+                <div class="k">PDN screen</div>
+                <div class="v" id="statElecStatus">—</div>
+                <div class="k" id="statElecRes" style="margin-top:4px; text-transform:none;">KCL residual —</div>
+              </div>
+            </div>
+
+            <p class="note" id="elecThresholdsText" style="font-family:var(--mono); font-size:12px;"></p>
+
+            <div class="field">
+              <label for="inTraceW">Power trace width <output id="outTraceW">5.0 mm</output></label>
+              <input type="range" id="inTraceW" min="0.5" max="40" step="0.5" value="5" />
+            </div>
+
+            <div>
+              <h2>Copper weight swap (0.5 oz = 17.5 µm · 1 oz = 35 µm · 2 oz = 70 µm)</h2>
+              <div class="seg" id="copperSwapSeg" role="group" aria-label="Copper weight swap">
+                <button type="button" data-part="cu_weight_05oz" data-oz="0.5" aria-pressed="false">0.5 oz (17.5 µm)</button>
+                <button type="button" data-part="cu_weight_1oz" data-oz="1" aria-pressed="true">1 oz (35 µm)</button>
+                <button type="button" data-part="cu_weight_2oz" data-oz="2" aria-pressed="false">2 oz (70 µm)</button>
+              </div>
+              <div style="display:flex; gap:8px; align-items:center; margin-top:8px; flex-wrap:wrap;">
+                <button class="btn small" id="copperUndoBtn" type="button" disabled>↶ Undo copper swap</button>
+                <span class="note" id="copperSwapMsg" style="flex:1 1 180px; font-family:var(--mono); font-size:12px;">Tap a copper weight above to swap foil thickness and compare IR drop &amp; J.</span>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -465,7 +523,7 @@
 <div class="scrim" id="airgapModal" role="dialog" aria-modal="true" aria-labelledby="airgapTitle">
   <div class="sheet">
     <h3 id="airgapTitle">Air-gapped by design</h3>
-    <p>Everything you just ran — the 32×32 thermal solver, the parametric generators, the STL / GLB / USDZ exporters — executed entirely on this device.</p>
+    <p>Everything you just ran — the 32×32 thermal solver, the 2D nodal electrical IR-drop solver, the parametric generators, the STL / GLB / USDZ exporters — executed entirely on this device.</p>
     <ul>
       <li>Zero API calls, zero telemetry, zero analytics</li>
       <li>Your dimensions and power numbers never leave the phone</li>
@@ -544,6 +602,7 @@
 <script src="vendor/jspdf.umd.min.js"></script>
 <script src="presets.js"></script>
 <script src="thermal-solver.js"></script>
+<script src="electrical-solver.js"></script>
 <script src="exporters.js"></script>
 <script src="app.js"></script>
 </body>
