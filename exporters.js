@@ -10,11 +10,11 @@
 (function (root, factory) {
   "use strict";
   if (typeof module === "object" && module.exports) {
-    module.exports = factory(require("./presets.js"), require("./thermal-solver.js"));
+    module.exports = factory(require("./presets.js"), require("./thermal-solver.js"), require("./electrical-solver.js"));
   } else {
-    root.SolidSayExporters = factory(root.SolidSayPresets, root.SolidSayThermal);
+    root.SolidSayExporters = factory(root.SolidSayPresets, root.SolidSayThermal, root.SolidSayElectrical);
   }
-})(typeof self !== "undefined" ? self : this, function (P, T) {
+})(typeof self !== "undefined" ? self : this, function (P, T, EL) {
   "use strict";
 
   /* ------------------------------------------------------------------ */
@@ -522,10 +522,55 @@
     return out;
   }
 
+  function buildElectricalSummary(design, result, elecResult) {
+    const d = (result && result.design) || design;
+    const el = elecResult || (EL && EL.solveElectrical ? EL.solveElectrical(d, result) : null);
+    if (!el) return null;
+    const defaultDisclaimer = (EL && EL.DISCLAIMER) || "Fast DC resistive screener (2D nodal analysis on copper geometry, temperature-coupled +0.393%/°C) — not an Ansys SIwave / HyperLynx PDN sign-off tool.";
+    if (!el.hasPowerDelivery) {
+      return {
+        hasPowerDelivery: false,
+        copper: null,
+        railV: null,
+        status: el.status || "no power delivery in this part",
+        message: el.message || "no power delivery in this part",
+        disclaimer: el.disclaimer || defaultDisclaimer
+      };
+    }
+    const irOver = !!(el.overModelLimit || (el.worstIrDropMv > el.railV * 1000));
+    const irPctVal = +el.worstIrDropPct.toFixed(2);
+    return {
+      hasPowerDelivery: true,
+      railV: el.railV,
+      copper: {
+        traceWidthMm: el.copper.traceWidthMm,
+        copperOz: el.copper.copperOz,
+        thicknessUm: el.copper.thicknessUm,
+        thicknessMm: el.copper.thicknessMm,
+        crossSectionMm2: el.copper.crossSectionMm2,
+        layers: el.copper.layers,
+        vias: el.copper.vias
+      },
+      worstIrDropMv: +el.worstIrDropMv.toFixed(2),
+      worstIrDropPct: irOver ? 100 : irPctVal,
+      worstIrDropPctDisplay: irOver ? ">100% of rail — model limit" : (irPctVal.toFixed(2) + "%"),
+      worstIrDropDisplay: el.worstIrDropDisplay,
+      worstCurrentDensityAmm2: +el.worstCurrentDensityAmm2.toFixed(2),
+      worstCurrentDensityDisplay: el.worstCurrentDensityDisplay,
+      localResidual: el.localResidual,
+      irDropLimitPct: el.irDropLimitPct,
+      currentDensityLimitAmm2: el.currentDensityLimitAmm2,
+      overModelLimit: !!el.overModelLimit,
+      pass: el.pass,
+      status: el.status,
+      disclaimer: el.disclaimer || defaultDisclaimer
+    };
+  }
+
   /* ------------------------------------------------------------------ */
   /* Compact Thermal Model (CTM-JSON) Exporter                          */
   /* ------------------------------------------------------------------ */
-  function exportCTM(design, result) {
+  function exportCTM(design, result, elecResult) {
     const net = result.network || T.resistanceNetwork(design, result);
     const d = result.design || design;
     const mat = P.MATERIALS[d.mat === "fr4" ? "aluminum" : d.mat];
@@ -560,9 +605,11 @@
       });
     });
 
+    const electricalSummary = buildElectricalSummary(d, result, elecResult);
+
     return {
       schema: "SolidSay-CTM-v1",
-      generator: "SolidSay v2 ProtoFlow Engine",
+      generator: "SolidSay v3 Power-Integrity Engine",
       created: new Date().toISOString(),
       metadata: {
         designName: d.presetName || d.gen,
@@ -572,17 +619,41 @@
         totalPowerW: net.power,
         peakTjC: +result.peak.toFixed(2),
         peakTjDisplay: T.formatPeakTj(result.peak),
-        thetaJA_C_W: +result.thetaJA.toFixed(3)
+        thetaJA_C_W: +result.thetaJA.toFixed(3),
+        thermalLocalResidual: result.localResidual,
+        electrical: electricalSummary
       },
+      electrical: electricalSummary,
       nodes: nodes,
       resistors: resistors
     };
   }
 
   /* ------------------------------------------------------------------ */
+  /* Gist Snapshot JSON Exporter                                        */
+  /* ------------------------------------------------------------------ */
+  function exportGistSnapshot(design, result, elecResult) {
+    const d = (result && result.design) || design;
+    const res = result || T.solveThermal(d);
+    return {
+      app: "SolidSay v3 Power-Integrity",
+      timestamp: new Date().toISOString(),
+      design: d,
+      result: {
+        peakTj: res.peak,
+        peakTjDisplay: T.formatPeakTj(res.peak),
+        thetaJA: res.thetaJA,
+        converged: res.converged,
+        localResidual: res.localResidual,
+        electrical: buildElectricalSummary(d, res, elecResult)
+      }
+    };
+  }
+
+  /* ------------------------------------------------------------------ */
   /* PDF Regression Record Builder (jsPDF Integration)                  */
   /* ------------------------------------------------------------------ */
-  function generatePDFReport(design, result, baselineResult) {
+  function generatePDFReport(design, result, baselineResult, elecResult) {
     let jsPDFClass = null;
     if (typeof window !== "undefined" && window.jspdf && window.jspdf.jsPDF) {
       jsPDFClass = window.jspdf.jsPDF;
@@ -602,11 +673,12 @@
     const doc = new jsPDFClass({ orientation: "portrait", unit: "mm", format: "a4" });
     const d = result.design || design;
     const net = result.network || T.resistanceNetwork(d, result);
+    const el = elecResult || (EL && EL.solveElectrical ? EL.solveElectrical(d, result) : null);
 
     // Title & Header
     doc.setFont("helvetica", "bold");
     doc.setFontSize(18);
-    doc.text("SolidSay Thermal Audit Card", 20, 25);
+    doc.text("SolidSay Thermal & Power-Integrity Audit Card", 20, 25);
 
     doc.setFont("helvetica", "normal");
     doc.setFontSize(10);
@@ -661,33 +733,58 @@
       y += 6;
     });
 
-    // Analytical Verification Badge
-    y += 10;
+    // Electrical Power-Integrity Screener Breakdown
+    y += 6;
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(12);
+    doc.text("2D DC Power-Integrity Screener (Temperature-Coupled)", 20, y);
+    y += 7;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    if (el && el.hasPowerDelivery) {
+      doc.text("Rail: " + el.railV.toFixed(1) + " V · Copper: " + el.copper.copperOz + " oz (" + el.copper.thicknessUm + " µm), W = " + el.copper.traceWidthMm + " mm, " + el.copper.layers + "L, " + el.copper.vias + " vias", 25, y);
+      y += 5;
+      const irPctTxt = (el.worstIrDropMv > el.railV * 1000)
+        ? ">100% of rail — model limit"
+        : (el.worstIrDropPct.toFixed(2) + "% of " + el.railV.toFixed(1) + " V rail");
+      doc.text("Worst IR Drop: " + el.worstIrDropDisplay + " (" + irPctTxt + "; threshold <= 5.0% = " + el.irDropLimitMv.toFixed(0) + " mV)", 25, y);
+      y += 5;
+      doc.text("Worst Current Density: " + el.worstCurrentDensityDisplay + " (A = " + el.copper.crossSectionMm2.toFixed(4) + " mm²; threshold <= 20.0 A/mm²)", 25, y);
+      y += 5;
+      doc.text("Scope: " + el.disclaimer, 25, y);
+      y += 4;
+    } else {
+      doc.text("Power delivery: no power delivery in this part (copper: null).", 25, y);
+      y += 4;
+    }
+
+    // Per-Design Local-Residual Verification Box
+    y += 8;
     doc.setDrawColor(52, 211, 153);
     doc.setFillColor(236, 253, 245);
-    doc.rect(20, y, 170, 25, "FD");
+    doc.rect(20, y, 170, 28, "FD");
 
     doc.setTextColor(6, 95, 70);
     doc.setFont("helvetica", "bold");
     doc.setFontSize(11);
-    doc.text("✓ Local-Residual Verification", 25, y + 8);
+    doc.text("✓ Per-Design Local-Residual Verification", 25, y + 8);
 
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
-    // Cite the local residual for THIS design — the real convergence number.
-    // The old line cited "residual energy balance < 3%", which the solver
-    // forces to ~0 by construction and therefore proves nothing. If no
-    // finite local residual exists, state that instead of claiming proof.
+    // Cite the local PDE / KCL residuals for THIS design — the real convergence numbers.
     const lrPct = result.localResidual;
+    const elLrTxt = (el && el.hasPowerDelivery && isFinite(el.localResidual))
+      ? " · Electrical KCL local residual " + (el.localResidual * 100).toFixed(4) + "%"
+      : "";
     doc.text(isFinite(lrPct)
-      ? "Local residual " + (lrPct * 100).toFixed(4) + "% for this design (max-cell FD residual vs total power)."
+      ? "Thermal FD local residual " + (lrPct * 100).toFixed(4) + "%" + elLrTxt
       : "No local-residual verification available for this design.", 25, y + 16);
-    doc.text("100% deterministic local solve.", 25, y + 22);
+    doc.text("100% deterministic on-device solve (" + (result.ms ? result.ms.toFixed(1) + " ms" : "local") + ").", 25, y + 22);
 
     // Footer
     doc.setTextColor(150);
     doc.setFontSize(8);
-    doc.text("SolidSay v2 · Commercial Licensing: Free Maker ($0) · Indie ($49/mo) · Verified Report Pack ($99)", 20, 280);
+    doc.text("SolidSay v3 · Commercial Licensing: Free Maker ($0) · Indie ($49/mo) · Verified Report Pack ($99)", 20, 280);
 
     return {
       doc: doc,
@@ -711,7 +808,7 @@
         "Continuous junction temp Tj <= 80 °C under nominal ambient",
         "Peak burst temp Tj <= 105 °C under max ambient",
         "Watertight 2-manifold STL export",
-        "Deterministic local solve < 50 ms"
+        "Deterministic on-device thermal + electrical local-residual solve"
       ]
     };
 
@@ -732,14 +829,12 @@
       run_thermal_gate: function (customDesign) {
         const d = customDesign || (appState && appState.design) || P.DESIGN_DEFAULTS;
         const res = T.solveThermal(d);
+        const elRes = (EL && EL.solveElectrical) ? EL.solveElectrical(d, res) : null;
         const passMaxTj = res.peak <= currentProject.maxTjLimitC;
         const bom = P.estimateBomUSD(d);
         const passCost = bom.totalUSD <= currentProject.targetUnitCostUSD;
         // Residual gate uses the LOCAL residual (max-cell FD residual vs
-        // total power) — the real convergence number. res.residual is the
-        // energy-balance error, which the solver forces to ~0 by
-        // construction; gating on it would pass by construction and prove
-        // nothing, so it is never cited here.
+        // total power) — the real convergence number.
         const passResidual = isFinite(res.localResidual) && res.localResidual <= 0.03;
 
         return {
@@ -752,8 +847,11 @@
           design: d,
           result: {
             peakTj: res.peak,
+            peakTjDisplay: T.formatPeakTj(res.peak),
             thetaJA: res.thetaJA,
-            converged: res.converged
+            converged: res.converged,
+            localResidual: res.localResidual,
+            electrical: buildElectricalSummary(d, res, elRes)
           }
         };
       }
@@ -771,6 +869,7 @@
     encodeRawPNG: encodeRawPNG,
     storeZip: storeZip,
     exportCTM: exportCTM,
+    exportGistSnapshot: exportGistSnapshot,
     generatePDFReport: generatePDFReport,
     createSolidSayMCP: createSolidSayMCP
   };

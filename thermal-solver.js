@@ -5,7 +5,7 @@
    resistance network (Rjc → TIM → spreading → convection), deterministic
    auto-optimizer and the ThermoBench-5 analytical verification suite.
 
-   Honesty note: this is a real-time (< 50 ms) steady-state SCREENER for
+   Honesty note: this is a real-time steady-state SCREENER for
    early design decisions. It is not Ansys Icepak / Simcenter Flotherm 3-D
    CFD or FEA sign-off. Modelling assumptions are listed in ASSUMPTIONS.
 
@@ -22,7 +22,7 @@
   const GRID = 32;
   const NAT_CHOKE_GAP_MM = 2.2;
   const MIN_CHOKE = 0.25;
-  const RESIDUAL_LIMIT = 0.03;          // energy balance acceptance (3 %)
+  const RESIDUAL_LIMIT = 0.03;          // local residual acceptance (3 %)
   // Display-only model-limit flag for absurd peak Tj (P0-8, 2026-11-13).
   // The solver is a screening model: uncooled bare-die designs can report
   // peak Tj in the thousands of °C (e.g. GPU Die 5139 °C). That number is
@@ -187,7 +187,7 @@
   //      (Uint8Array|null), tAmb, tol, maxSweeps, T0? }
   // Gauss-Seidel SOR + a two-level additive (mean-mode) correction, which
   // removes the slow global-level error that makes plain SOR crawl on
-  // stiff metal plates. Converged when the L1 norm of the local energy
+  // stiff metal plates. Converged when the L1 norm of the local PDE
   // residuals falls below tol × total power.
   function solveGrid(o) {
     const nx = o.nx, ny = o.ny, n = nx * ny;
@@ -361,7 +361,7 @@
     const Ptot = pr.sources.reduce(function (s, x) { return s + x.power; }, 0);
     const tj = hottest ? Math.max(hottest.tj, d.amb) : d.amb;
     const warnings = sd.warnings.slice();
-    if (!sol.converged) warnings.push("Solver did not reach the 3 % energy-balance criterion (residual " + (sol.balanceErr * 100).toFixed(1) + " %). Treat this result as indicative only.");
+    if (!sol.converged) warnings.push("Solver did not reach the local PDE residual convergence criterion (local residual " + (sol.residual * 100).toFixed(4) + " %). Treat this result as indicative only.");
     if (sol.error) warnings.push(sol.error);
     const res = {
       grid: grid, nx: N, ny: N, design: d,
@@ -582,7 +582,7 @@
       const s = solveGridMultilevel({ nx: n, ny: n, gx: g, gy: g, gc: gc, q: q, tAmb: tAmb, tol: 1e-7 });
       let mx = -1e9, mn = 1e9, mean = 0;
       for (let i = 0; i < n * n; i++) { mx = Math.max(mx, s.T[i]); mn = Math.min(mn, s.T[i]); mean += s.T[i] / (n * n); }
-      cases.push(bench("TB1", "Isothermal plate: T = T∞ + P/(hA)", tAmb + Pw / (h * A), mean, 0.5, s.balanceErr, "spread " + (mx - mn).toFixed(4) + " K"));
+      cases.push(bench("TB1", "Isothermal plate: T = T∞ + P/(hA)", tAmb + Pw / (h * A), mean, 0.5, s.residual, "spread " + (mx - mn).toFixed(4) + " K"));
     })();
     // TB2 — 1-D Fourier slab: heat in at x = 0, convective sink at x = L.
     (function () {
@@ -593,7 +593,7 @@
       for (let j = 0; j < ny; j++) { q[j * nx] = Pw / ny; gc[j * nx + nx - 1] = Gend / ny; }
       const s = solveGrid({ nx: nx, ny: ny, gx: gx, gy: gy, gc: gc, q: q, tAmb: tAmb, tol: 1e-9, maxSweeps: 200000 });
       const analytic = tAmb + Pw / Gend + Pw * (L - dx) / (k * t * Dm);
-      cases.push(bench("TB2", "1-D Fourier slab: ΔT = P·L/(k·t·D)", analytic, s.T[0], 0.5, s.balanceErr));
+      cases.push(bench("TB2", "1-D Fourier slab: ΔT = P·L/(k·t·D)", analytic, s.T[0], 0.5, s.residual));
     })();
     // TB3 — straight fin: FD fin conductance vs η·h·A_fin, with η from an
     // INDEPENDENT hand-computed reference (P0-3 fix, 2026-11-13). The old
@@ -624,15 +624,14 @@
       cases.push(bench("TB3", "Fin equation: Q/θb = η·h·A_fin, η = tanh(mH)/mH hand-computed (mH = " + ML_REF.toFixed(2) + ", η = " + ETA_REF.toFixed(3) + ")", Gan, Gfd, 1.5, s.residual, "η reference is a hard-coded hand value, not finEfficiency()"));
     })();
     // TB4 — grid-independence re-solve on the four ProtoFlow boards + Pi 5 + MI300X.
-    // (Replaces the old energy-balance case, removed 2026-11-13: it read
-    // r.residual, the global balance the mean-mode correction forces to ~0
+    // (Replaces the old case, removed 2026-11-13: it read
+    // r.residual, the global quantity the mean-mode correction forces to ~0
     // by construction, so it passed by construction and proved nothing.)
     // Each board is solved twice from a cold start at two different grids
     // (32×32 tol 1e-6 vs 64×64 tol 1e-7); the two peak-Tj values must agree
     // to < 3 %. The two discretisations can only agree if both solves have
     // genuinely converged to the same field — this check cannot pass by
-    // construction. Residual reported is the worst local (PDE) residual,
-    // not the forced global balance.
+    // construction. Residual reported is the worst local (PDE) residual.
     (function () {
       let worst = 0, worstLocal = 0, worstName = "", worstDetail = "";
       const list = P.PROTOFLOW_BOARDS.concat(P.FAMOUS_BOARDS.filter(function (b) { return b.id === "pi5" || b.id === "mi300x"; }));
@@ -650,7 +649,7 @@
     (function () {
       const d = P.designFromPreset(P.FAMOUS_BOARDS[0]);
       const r32 = solveThermal(d, { grid: 32, tol: 1e-6 }), r64 = solveThermal(d, { grid: 64, tol: 1e-6 });
-      cases.push(bench("TB5", "Grid independence: plate rise 32×32 vs 64×64", r64.plateMax - d.amb, r32.plateMax - d.amb, 3, Math.max(r32.residual, r64.residual)));
+      cases.push(bench("TB5", "Grid independence: plate rise 32×32 vs 64×64", r64.plateMax - d.amb, r32.plateMax - d.amb, 3, Math.max(r32.localResidual, r64.localResidual)));
     })();
     return { cases: cases, allPass: cases.every(function (c) { return c.pass; }), ms: now() - t0 };
   }
