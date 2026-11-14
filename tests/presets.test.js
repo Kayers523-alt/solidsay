@@ -143,5 +143,25 @@ suite("presets.js — part swap & undo", function () {
     const pcb = P.designFromPreset(P.FAMOUS_BOARDS.find(function (b) { return b.id === "preset_eth_gateway"; }));
     throws(function () { P.applyPart(pcb, "hs_fischer_sk89"); });
     ok(P.applyPart(pcb, "fan_noctua_nfa4x10_5v").air === "forced");
+    // Copper weight swap is rejected on passive (copper: null) parts
+    const bracket = P.designFromPreset(P.FAMOUS_BOARDS.find(function (b) { return b.id === "nema17"; }));
+    throws(function () { P.applyPart(bracket, "cu_weight_2oz"); });
+    // Copper weight swap succeeds on active copper boards
+    const pcb2oz = P.applyPart(pcb, "cu_weight_2oz");
+    eq(pcb2oz.copper.copperOz, 2);
+  });
+  test("every preset has explicit copper (object or null) and locked COPPER_OZ_TABLE", function () {
+    eq(P.COPPER_OZ_TABLE[0.5].thicknessUm, 17.5);
+    eq(P.COPPER_OZ_TABLE[1].thicknessUm, 35.0);
+    eq(P.COPPER_OZ_TABLE[2].thicknessUm, 70.0);
+    P.PRESETS.forEach(function (p) {
+      ok(Object.prototype.hasOwnProperty.call(p, "copper"), p.name + " must have explicit copper key");
+      if (p.copper !== null) {
+        ok(p.copper.traceWidthMm > 0 && P.COPPER_OZ_TABLE[p.copper.copperOz] && p.copper.layers >= 1 && p.copper.vias >= 1, p.name);
+        ok(typeof p.railV === "number" && p.railV > 0, p.name + " railV");
+      } else {
+        eq(p.railV, null, p.name + " passive railV must be null");
+      }
+    });
   });
 });

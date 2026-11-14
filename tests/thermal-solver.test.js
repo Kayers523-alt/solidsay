@@ -30,13 +30,13 @@ suite("thermal-solver.js — fin physics & choking", function () {
 });
 
 suite("thermal-solver.js — coupled 1D resistance network & solve", function () {
-  test("solveThermal returns peak, thetaJA, and energy balance < 3%", function () {
+  test("solveThermal returns peak, thetaJA, and local residual < 3%", function () {
     const d = P.designFromPreset(P.FAMOUS_BOARDS[0]); // Raspberry Pi 5
     const res = T.solveThermal(d);
     ok(res.peak > d.amb);
     ok(res.thetaJA > 0);
     ok(res.converged);
-    ok(res.residual < 0.03, "Energy residual must be < 3%");
+    ok(res.localResidual < 0.03, "Local PDE residual must be < 3%");
     ok(res.network);
     ok(res.network.stages.length === 4);
   });

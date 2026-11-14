@@ -57,13 +57,15 @@ suite("exporters.js — Watertight STL & iOS Quick Look USDZ", function () {
 });
 
 suite("exporters.js — CTM-JSON & PDF Report & SolidSayMCP", function () {
-  test("CTM-JSON generates valid resistor-capacitor network schema", function () {
+  test("CTM-JSON generates valid resistor-capacitor network schema with electrical summary", function () {
     const d = P.designFromPreset(P.FAMOUS_BOARDS[0]);
     const res = T.solveThermal(d);
     const ctm = E.exportCTM(d, res);
     eq(ctm.schema, "SolidSay-CTM-v1");
     ok(ctm.nodes.length >= 4);
     ok(ctm.resistors.length >= 3);
+    ok(ctm.electrical && ctm.electrical.hasPowerDelivery === true, "CTM electrical summary present");
+    ok(ctm.electrical.worstIrDropMv > 0 && ctm.electrical.worstCurrentDensityAmm2 > 0);
   });
 
   test("PDF generator produces PDF document with verification badges", function () {
@@ -87,5 +89,47 @@ suite("exporters.js — CTM-JSON & PDF Report & SolidSayMCP", function () {
     const gateRes = mcp.run_thermal_gate(coolDesign);
     ok(gateRes.checks.peakTj.pass, "Peak Tj should pass limit with forced air cooling");
     ok(gateRes.checks.localResidual.pass, "Local residual should pass the 3% limit");
+    ok(gateRes.result.peakTjDisplay, "MCP gate includes peakTjDisplay");
+    ok(gateRes.result.electrical && gateRes.result.electrical.hasPowerDelivery === true, "MCP gate includes electrical result");
+    ok(gateRes.result.electrical.disclaimer && gateRes.result.electrical.copper && gateRes.result.electrical.railV > 0, "MCP gate includes complete electrical summary");
+  });
+
+  test("exportGistSnapshot, exportCTM, and generatePDFReport handle both active and copper: null presets", function () {
+    // Active preset (Pi 5)
+    const dActive = P.designFromPreset(P.FAMOUS_BOARDS[0]);
+    const rActive = T.solveThermal(dActive);
+    const gistActive = E.exportGistSnapshot(dActive, rActive);
+    eq(gistActive.app, "SolidSay v3 Power-Integrity");
+    ok(gistActive.result.peakTjDisplay, "Gist active includes peakTjDisplay");
+    const elA = gistActive.result.electrical;
+    eq(elA.hasPowerDelivery, true);
+    ok(elA.railV > 0);
+    ok(elA.copper && elA.copper.thicknessUm > 0 && elA.copper.crossSectionMm2 > 0);
+    ok(typeof elA.worstIrDropPctDisplay === "string");
+    ok(elA.disclaimer && /DC resistive screener/i.test(elA.disclaimer));
+
+    // Passive preset (Cold Plate, copper: null)
+    const coldPlate = P.PRESETS.find(p => p.name === "Cold Plate");
+    const dNull = P.designFromPreset(coldPlate);
+    const rNull = T.solveThermal(dNull);
+
+    const ctmNull = E.exportCTM(dNull, rNull);
+    eq(ctmNull.electrical.hasPowerDelivery, false);
+    eq(ctmNull.electrical.copper, null);
+    eq(ctmNull.electrical.railV, null);
+    eq(ctmNull.electrical.status, "no power delivery in this part");
+    eq(ctmNull.electrical.message, "no power delivery in this part");
+    ok(ctmNull.electrical.disclaimer && /DC resistive screener/i.test(ctmNull.electrical.disclaimer));
+
+    const gistNull = E.exportGistSnapshot(dNull, rNull);
+    eq(gistNull.result.electrical.hasPowerDelivery, false);
+    eq(gistNull.result.electrical.copper, null);
+    eq(gistNull.result.electrical.railV, null);
+    eq(gistNull.result.electrical.status, "no power delivery in this part");
+    eq(gistNull.result.electrical.message, "no power delivery in this part");
+    ok(gistNull.result.electrical.disclaimer);
+
+    const pdfNull = E.generatePDFReport(dNull, rNull);
+    ok(pdfNull.pdfBlob || pdfNull.pdfArrayBuffer, "PDF generated for copper: null preset");
   });
 });
