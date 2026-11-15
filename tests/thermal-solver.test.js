@@ -128,17 +128,42 @@ suite("thermal-solver.js — ThermoBench-5 suite", function () {
 });
 
 suite("thermal-solver.js — peak-Tj model-limit display flag (P0-8)", function () {
-  test("formatPeakTj flags >1000 °C and leaves normal values alone", function () {
+  test("formatPeakTj flags >200 °C and leaves normal values alone", function () {
     eq(T.formatPeakTj(85), "85.0 °C");
-    eq(T.formatPeakTj(1000), "1000.0 °C");
+    eq(T.formatPeakTj(200), "200.0 °C");
+    eq(T.formatPeakTj(199.9), "199.9 °C");
     eq(T.formatPeakTjShort(85), "85.0 °C");
-    eq(T.formatPeakTjShort(5139.4), ">1000 °C");
+    eq(T.formatPeakTjShort(5139.4), ">200 °C");
     const flagged = T.formatPeakTj(5139.4);
-    ok(flagged.indexOf(">1000 °C") === 0, "flagged Tj must start with >1000 °C, got: " + flagged);
+    ok(flagged.indexOf(">200 °C") === 0, "flagged Tj must start with >200 °C, got: " + flagged);
     ok(flagged.indexOf("model limit") !== -1, "flagged Tj must say model limit, got: " + flagged);
     ok(flagged.indexOf("not a real temperature") !== -1, "flagged Tj must say it is not a real temperature, got: " + flagged);
     ok(flagged.indexOf("5139") === -1, "flagged Tj must not show the bare absurd number, got: " + flagged);
-    eq(T.TJ_MODEL_LIMIT_C, 1000);
+    // P1 F5: the 200-1000 °C band is newly flagged (was bare below 1000 °C).
+    ok(T.formatPeakTj(544).indexOf(">200 °C") === 0, "MI300X 544 °C must be flagged, got: " + T.formatPeakTj(544));
+    ok(T.formatPeakTj(544).indexOf("544") === -1, "flagged 544 °C must not show the bare number, got: " + T.formatPeakTj(544));
+    ok(T.formatPeakTj(330).indexOf(">200 °C") === 0, "ESP32-S3 330 °C must be flagged, got: " + T.formatPeakTj(330));
+    ok(T.formatPeakTj(200.1).indexOf(">200 °C") === 0, "just over the limit must be flagged, got: " + T.formatPeakTj(200.1));
+    eq(T.TJ_MODEL_LIMIT_C, 200);
+    // P1 W3: the HUD Peak Tj chip shows the short form — these are the exact
+    // strings #hudTj now renders for the acceptance presets (MI300X, ESP32-S3),
+    // while an unflagged preset keeps its plain number (Pi 5, 137.9 °C).
+    eq(T.formatPeakTjShort(544), ">200 °C");
+    eq(T.formatPeakTjShort(330), ">200 °C");
+    eq(T.formatPeakTjShort(137.9), "137.9 °C");
+  });
+
+  test("HUD Peak Tj chip uses the short form; stat row keeps the full reason (P1 W3)", function () {
+    const fs = require("fs");
+    const path = require("path");
+    const src = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8").split("\n");
+    const hudLines = src.filter(function (l) { return l.indexOf("tjEl.textContent") !== -1; });
+    eq(hudLines.length, 1, "exactly one #hudTj assignment expected, got " + hudLines.length);
+    ok(hudLines[0].indexOf("formatPeakTjShort") !== -1, "#hudTj must use the short form, got: " + hudLines[0].trim());
+    const statLines = src.filter(function (l) { return l.indexOf("statTj") !== -1 && l.indexOf("textContent") !== -1; });
+    eq(statLines.length, 1, "exactly one #statTj assignment expected, got " + statLines.length);
+    ok(statLines[0].indexOf("formatPeakTj(tj)") !== -1 && statLines[0].indexOf("Short") === -1,
+      "#statTj must keep the full flag sentence, got: " + statLines[0].trim());
   });
 
   test("RESULT.peak stays numeric and unchanged — only the string is capped", function () {
@@ -148,6 +173,6 @@ suite("thermal-solver.js — peak-Tj model-limit display flag (P0-8)", function 
     const r = T.solveThermal(d);
     near(r.peak, 5139.4, 0.5, "GPU Die peak Tj must stay ~5139.4 °C numerically");
     ok(typeof r.peak === "number", "RESULT.peak must stay a number");
-    ok(T.formatPeakTj(r.peak).indexOf(">1000 °C") === 0, "display of that peak must be flagged");
+    ok(T.formatPeakTj(r.peak).indexOf(">200 °C") === 0, "display of that peak must be flagged");
   });
 });

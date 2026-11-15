@@ -1015,9 +1015,15 @@
       ? (after.worstCurrentDensityAmm2 - before.worstCurrentDensityAmm2) : null;
     const tjAfter = (after && typeof after.tj === "number") ? after.tj : 0;
     const tjBefore = (before && typeof before.tj === "number") ? before.tj : 0;
-    const overLimit = tjBefore > 1000 || tjAfter > 1000;
-    const tjStr = tjAfter > 1000
-      ? ">1000 °C — model limit, uncooled bare-die output, not a real temperature"
+    // P1 F5 (2026-11-14, Keith-approved): model-limit display threshold is
+    // 200 °C — must match SolidSayThermal.TJ_MODEL_LIMIT_C. presets.js is
+    // solver-free so it cannot read that constant; keep this literal in
+    // sync with thermal-solver.js. No real silicon/board in this app can
+    // operate above 200 °C (solder melts ~183-217 °C, silicon rated max
+    // ~125-150 °C), so any Tj above it is flagged, never printed bare.
+    const overLimit = tjBefore > 200 || tjAfter > 200;
+    const tjStr = tjAfter > 200
+      ? ">200 °C — model limit, uncooled bare-die output, not a real temperature"
       : tjAfter.toFixed(1) + "°C";
     const dTStr = overLimit ? "model limit" : fmtSigned(dT, 1) + "°C";
     return {

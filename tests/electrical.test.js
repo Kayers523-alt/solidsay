@@ -67,6 +67,16 @@ suite("electrical-solver.js — unit tests (resistivity, thickness table, 2-resi
     eq(EL.formatCurrentDensity(18.5), "18.50 A/mm²");
     ok(/model limit/.test(EL.formatCurrentDensity(620)), "J > 500 A/mm² must show model limit");
   });
+
+  test("formatResidualPct shows the REAL measured residual, never rounded to 0.0000%", function () {
+    // Worst measured electrical residual across the 50-preset sweep (HBM):
+    // 9.929014573132808e-8 fraction = 9.93e-6% — the old toFixed(4) printed "0.0000%".
+    eq(EL.formatResidualPct(9.929014573132808e-8), "9.93e-6%");
+    eq(EL.formatResidualPct(0.0005), "0.0500%");
+    eq(EL.formatResidualPct(0.00123456), "0.1235%");
+    eq(EL.formatResidualPct(0), "0%");
+    eq(EL.formatResidualPct(NaN), "—");
+  });
 });
 
 suite("electrical-solver.js — ElectroBench-3 independent analytical suite", function () {
@@ -175,7 +185,7 @@ suite("electrical-solver.js — temperature coupling, copper-weight swap + Undo,
     eq(nullCount, 25, "25 passive presets with copper: null");
   });
 
-  test("GPU Die previewSwap flags >1000 °C and extreme IR drop does not leak raw >100% percentage", function () {
+  test("GPU Die previewSwap flags >200 °C and extreme IR drop does not leak raw >100% percentage", function () {
     const E = require("../exporters.js");
     const gpuPreset = P.PRESETS.find(function (p) { return p.name === "GPU Die"; });
     ok(gpuPreset, "GPU Die preset exists");
@@ -187,7 +197,7 @@ suite("electrical-solver.js — temperature coupling, copper-weight swap + Undo,
     };
     const preview = P.previewSwap(dGpu, "cu_weight_05oz", evalBoth);
     ok(!/5139/.test(preview.text), "GPU Die previewSwap must not print raw 5139°C, got: " + preview.text);
-    ok(/>1000 °C/.test(preview.text), "GPU Die previewSwap must flag >1000 °C, got: " + preview.text);
+    ok(/>200 °C/.test(preview.text), "GPU Die previewSwap must flag >200 °C, got: " + preview.text);
     ok(/model limit/.test(preview.text), "GPU Die previewSwap must note model limit, got: " + preview.text);
 
     // Extreme IR drop case (> 100% of rail)
@@ -201,7 +211,7 @@ suite("electrical-solver.js — temperature coupling, copper-weight swap + Undo,
     ok(ctm.electrical.worstIrDropPct <= 100, "CTM worstIrDropPct must be clamped <= 100");
     ok(/>100% of rail/.test(ctm.electrical.worstIrDropPctDisplay), "CTM worstIrDropPctDisplay flags >100% of rail");
     const gist = E.exportGistSnapshot(dExtreme, trEx, erEx);
-    ok(/>1000 °C/.test(gist.result.peakTjDisplay), "Gist peakTjDisplay flags >1000 °C");
+    ok(/>200 °C/.test(gist.result.peakTjDisplay), "Gist peakTjDisplay flags >200 °C");
     ok(/>100% of rail/.test(gist.result.electrical.worstIrDropPctDisplay), "Gist worstIrDropPctDisplay flags >100% of rail");
     const pdf = E.generatePDFReport(dExtreme, trEx, null, erEx);
     ok(pdf.pdfArrayBuffer, "PDF generated for extreme GPU Die case");

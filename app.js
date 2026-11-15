@@ -20,6 +20,7 @@
   const S = P.clone(P.DESIGN_DEFAULTS);
   let RESULT = null, ELEC_RESULT = null, BARE_RESULT = null;
   let viewFieldMode = "thermal"; // "thermal" | "electrical" | "both"
+  let activeViewMode = null; // F4 (P1): "top" | "bottom" | null (orbit/reset view — neither pill active)
   let lastManifold = null;
   const swapHistory = new P.SwapHistory();
 
@@ -257,7 +258,12 @@
     if (!RESULT) return;
     const tj = RESULT.peak;
     const tjEl = $("#hudTj");
-    tjEl.textContent = T.formatPeakTj(tj);
+    // P1 W3 (Critic 1 prescription): HUD chip shows the short form (">200 °C").
+    // The full sentence does not fit the chip at 393px — it wrapped to 3 lines,
+    // grew the chip to 119px and covered the view pills (up to 7330 px² on
+    // MI300X). formatPeakTjShort is the documented compact form for tight
+    // inline spots; the full reason stays in #statTj below and in all exports.
+    tjEl.textContent = T.formatPeakTjShort(tj);
     tjEl.className = tj > 100 ? "hot" : (tj > 80 ? "warm" : "cool");
     $("#hudTheta").textContent = RESULT.thetaJA.toFixed(2) + " °C/W";
 
@@ -286,13 +292,13 @@
       if (RESULT.converged && isFinite(RESULT.localResidual)) {
         const msTxt = isFinite(totalMs) ? totalMs.toFixed(1) + " ms" : "—";
         const hasEl = ELEC_RESULT && ELEC_RESULT.hasPowerDelivery && isFinite(ELEC_RESULT.localResidual);
-        badgeEl.textContent = "🟢 100% On-Device · 0 Cloud Calls · Thermal residual " + (RESULT.localResidual * 100).toFixed(4) + "%" + (hasEl ? " · Electrical residual " + (ELEC_RESULT.localResidual * 100).toFixed(4) + "%" : "") + " ✓ · " + msTxt;
+        badgeEl.textContent = "🟢 100% On-Device · 0 Cloud Calls · Thermal residual " + (RESULT.localResidual * 100).toFixed(4) + "%" + (hasEl ? " · Electrical residual " + EL.formatResidualPct(ELEC_RESULT.localResidual) : "") + " ✓ · " + msTxt;
       } else {
         badgeEl.textContent = "🟢 100% On-Device · 0 Cloud Calls";
       }
     }
 
-    $("#bigTemp").textContent = tj > T.TJ_MODEL_LIMIT_C ? ">1000°C" : tj.toFixed(0) + "°C";
+    $("#bigTemp").textContent = tj > T.TJ_MODEL_LIMIT_C ? ">" + T.TJ_MODEL_LIMIT_C + "°C" : tj.toFixed(0) + "°C";
     $("#bigTemp").style.color = tj > 100 ? "var(--red)" : (tj > 80 ? "var(--amber)" : "var(--green)");
     $("#bigTempLabel").textContent = (S.showcase ? "Showcase · room-temp demo only · " : "Peak junction · ") + S.power + " W · " + P.MATERIALS[S.mat].label;
     $("#hotBanner").classList.toggle("show", tj > 100);
@@ -306,10 +312,10 @@
       $("#legendHi").textContent = EL.formatCurrentDensityShort(jHi);
     } else if (viewFieldMode === "both" && ELEC_RESULT && ELEC_RESULT.hasPowerDelivery) {
       $("#legendLo").textContent = S.amb.toFixed(0) + "° / 0A";
-      $("#legendHi").textContent = (tj > T.TJ_MODEL_LIMIT_C ? ">1000°" : Math.max(tj, S.amb + 5).toFixed(0) + "°") + " / " + EL.formatCurrentDensityShort(jHi);
+      $("#legendHi").textContent = (tj > T.TJ_MODEL_LIMIT_C ? ">" + T.TJ_MODEL_LIMIT_C + "°" : Math.max(tj, S.amb + 5).toFixed(0) + "°") + " / " + EL.formatCurrentDensityShort(jHi);
     } else {
       $("#legendLo").textContent = S.amb.toFixed(0) + "°";
-      $("#legendHi").textContent = (tj > T.TJ_MODEL_LIMIT_C ? ">1000" : Math.max(tj, S.amb + 5).toFixed(0)) + "°";
+      $("#legendHi").textContent = (tj > T.TJ_MODEL_LIMIT_C ? ">" + T.TJ_MODEL_LIMIT_C : Math.max(tj, S.amb + 5).toFixed(0)) + "°";
     }
 
     // Bare die comparison
@@ -353,6 +359,23 @@
         nullNotice.textContent = EL.NO_POWER_MESSAGE;
       }
       if (activeControls) activeControls.style.display = "none";
+      // F3 (P1, 2026-11-14): the stat fields below live inside the hidden
+      // #elecActiveControls container, so their stale text is invisible —
+      // but it stays in the DOM when switching from a copper preset to a
+      // copper:null preset. Reset every one to its neutral initial value
+      // so no previous preset's IR drop / J / status / residual persists.
+      const resetElec = function (id, text, cls) {
+        const el = $(id);
+        if (el) { el.textContent = text; if (cls !== undefined) el.className = cls; }
+      };
+      resetElec("#statIrDrop", "—", "v");
+      resetElec("#statIrLimit", "Flag > 5.0% of rail");
+      resetElec("#statCurrDensity", "—", "v");
+      resetElec("#statJLimit", "Flag > 20.0 A/mm²");
+      resetElec("#statElecStatus", "—", "v");
+      resetElec("#statElecRes", "KCL residual —");
+      resetElec("#elecThresholdsText", "");
+      resetElec("#copperSwapMsg", "Tap a copper weight above to swap foil thickness and compare IR drop & J.");
     } else if (ELEC_RESULT && ELEC_RESULT.hasPowerDelivery) {
       if (nullNotice) nullNotice.hidden = true;
       if (activeControls) activeControls.style.display = "flex";
@@ -384,7 +407,7 @@
       }
       const resEl = $("#statElecRes");
       if (resEl) {
-        resEl.textContent = "Local KCL res " + (ELEC_RESULT.localResidual * 100).toFixed(4) + "% · " + ELEC_RESULT.ms.toFixed(1) + " ms";
+        resEl.textContent = "Local KCL res " + EL.formatResidualPct(ELEC_RESULT.localResidual) + " · " + ELEC_RESULT.ms.toFixed(1) + " ms";
       }
       const threshEl = $("#elecThresholdsText");
       if (threshEl) {
@@ -477,6 +500,15 @@
     });
   }
 
+  // F4 (P1): Top/Bottom view pills are a two-way toggle — exactly one is
+  // pressed at a time, or neither (orbit/reset view). Keep aria-pressed in
+  // sync on every view change and on every refresh (via syncControls).
+  function syncViewModePills() {
+    const top = $("#viewModeTop"), bottom = $("#viewModeBottom");
+    if (top) top.setAttribute("aria-pressed", activeViewMode === "top" ? "true" : "false");
+    if (bottom) bottom.setAttribute("aria-pressed", activeViewMode === "bottom" ? "true" : "false");
+  }
+
   function syncControls() {
     $("#inW").value = S.W; $("#outW").textContent = S.W + " mm";
     $("#inD").value = S.D; $("#outD").textContent = S.D + " mm";
@@ -499,6 +531,7 @@
     segSync("matSeg", "mat", S.mat);
     segSync("airSeg", "air", S.air);
     segSync("viewFieldSeg", "field", viewFieldMode);
+    syncViewModePills(); // F4: re-assert Top/Bottom pressed state on every refresh
 
     $("#finFields").style.display = (S.gen === "heatsink" || S.gen === "chiplet") ? "" : "none";
     $("#diesField").hidden = S.gen !== "chiplet";
@@ -716,15 +749,21 @@
     if ($("#resetCamBtn")) {
       $("#resetCamBtn").addEventListener("click", function () {
         camAz = 0.7; camEl = 0.85; camDist = Math.max(S.W, S.D) * 2.6;
+        activeViewMode = null; // F4: orbit view — neither Top nor Bottom is active
+        syncViewModePills();
       });
     }
 
     // Viewport Mode Switcher
     $("#viewModeTop").addEventListener("click", function () {
       camAz = 0; camEl = Math.PI / 2 - 0.01;
+      activeViewMode = "top"; // F4
+      syncViewModePills();
     });
     $("#viewModeBottom").addEventListener("click", function () {
       camAz = 0; camEl = -Math.PI / 2 + 0.01;
+      activeViewMode = "bottom"; // F4
+      syncViewModePills();
     });
     $("#viewModeStackup").addEventListener("click", function () {
       if (!RESULT) return;

@@ -23,7 +23,8 @@
   const NAT_CHOKE_GAP_MM = 2.2;
   const MIN_CHOKE = 0.25;
   const RESIDUAL_LIMIT = 0.03;          // local residual acceptance (3 %)
-  // Display-only model-limit flag for absurd peak Tj (P0-8, 2026-11-13).
+  // Display-only model-limit flag for absurd peak Tj (P0-8, 2026-11-13;
+  // threshold lowered 1000 -> 200 °C, P1 F5, 2026-11-14, Keith-approved).
   // The solver is a screening model: uncooled bare-die designs can report
   // peak Tj in the thousands of °C (e.g. GPU Die 5139 °C). That number is
   // an uncooled bare-die model output, not a real temperature, so any UI
@@ -31,17 +32,21 @@
   // bare number. Physics untouched: RESULT.peak keeps the raw value; only
   // the displayed string changes. formatPeakTjShort is the compact form
   // for tight inline spots (tables, deltas, big-number readouts).
-  const TJ_MODEL_LIMIT_C = 1000;
+  // Why 200 °C: no real silicon/board in this app can operate above it —
+  // solder melts ~183-217 °C and silicon is rated max ~125-150 °C — so
+  // any displayed Tj above 200 °C (e.g. MI300X 544 °C, ESP32-S3 330 °C)
+  // is a model-limit output, not a real temperature.
+  const TJ_MODEL_LIMIT_C = 200;
   const TJ_MODEL_LIMIT_NOTE = "model limit, uncooled bare-die output, not a real temperature";
   function formatPeakTj(tj) {
     if (typeof tj !== "number" || !isFinite(tj)) return "—";
     if (tj <= TJ_MODEL_LIMIT_C) return tj.toFixed(1) + " °C";
-    return ">1000 °C — " + TJ_MODEL_LIMIT_NOTE;
+    return ">" + TJ_MODEL_LIMIT_C + " °C — " + TJ_MODEL_LIMIT_NOTE;
   }
   function formatPeakTjShort(tj) {
     if (typeof tj !== "number" || !isFinite(tj)) return "—";
     if (tj <= TJ_MODEL_LIMIT_C) return tj.toFixed(1) + " °C";
-    return ">1000 °C";
+    return ">" + TJ_MODEL_LIMIT_C + " °C";
   }
   const now = (typeof performance !== "undefined" && performance.now) ? function () { return performance.now(); } : function () { return Date.now(); };
 

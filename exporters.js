@@ -774,7 +774,7 @@
     // Cite the local PDE / KCL residuals for THIS design — the real convergence numbers.
     const lrPct = result.localResidual;
     const elLrTxt = (el && el.hasPowerDelivery && isFinite(el.localResidual))
-      ? " · Electrical KCL local residual " + (el.localResidual * 100).toFixed(4) + "%"
+      ? " · Electrical KCL local residual " + EL.formatResidualPct(el.localResidual)
       : "";
     doc.text(isFinite(lrPct)
       ? "Thermal FD local residual " + (lrPct * 100).toFixed(4) + "%" + elLrTxt

@@ -130,6 +130,20 @@
     return jAmm2.toFixed(2) + " A/mm²";
   }
 
+  // Formats a residual FRACTION as a readable percent string using the REAL
+  // measured value — never rounded to zero. Values >= 0.01% print with 4
+  // decimals ("0.0500%"); smaller values print in scientific notation
+  // ("9.93e-6%") so the true magnitude stays visible. The old
+  // (frac * 100).toFixed(4) rendering printed "0.0000%" for the real
+  // ~1e-5% electrical residuals, which hid the measured number.
+  function formatResidualPct(frac) {
+    if (typeof frac !== "number" || !isFinite(frac)) return "—";
+    const pct = frac * 100;
+    if (pct === 0) return "0%";
+    if (Math.abs(pct) >= 0.01) return pct.toFixed(4) + "%";
+    return pct.toExponential(2) + "%";
+  }
+
   /* ------------------------------------------------------------------ */
   /* 2-D Variable-Conductance Nodal KCL Solver                          */
   /* ------------------------------------------------------------------ */
@@ -599,7 +613,7 @@
 
     const warnings = sd.warnings.slice();
     if (!sol.converged) {
-      warnings.push("Electrical nodal solver did not reach the local KCL residual convergence criterion (local residual " + (sol.localResidual * 100).toFixed(4) + " %).");
+      warnings.push("Electrical nodal solver did not reach the local KCL residual convergence criterion (local residual " + formatResidualPct(sol.localResidual) + ").");
     }
 
     return {
@@ -947,6 +961,7 @@
     formatIrDropShort: formatIrDropShort,
     formatCurrentDensity: formatCurrentDensity,
     formatCurrentDensityShort: formatCurrentDensityShort,
+    formatResidualPct: formatResidualPct,
     localKclResidual: localKclResidual,
     solveNodalGrid: solveNodalGrid,
     solveElectrical: solveElectrical,
