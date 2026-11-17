@@ -11,7 +11,14 @@
 <meta property="og:description" content="Turn plain words into printable 3D models — chips, boards, heatsinks and enclosures — with a built-in thermal solver. 100% offline, no cloud." />
 <meta property="og:type" content="website" />
 <meta property="og:url" content="https://kayers523-alt.github.io/solidsay/" />
-<!-- og:image deferred: the icon file (solidsay-icon.png) is binary and cannot be pushed through the GitHub connector; upload it to the repo separately, then re-add the og:image meta tag. -->
+<!-- CSP via meta: GitHub Pages sets no security headers, so this is the in-page
+     equivalent. Note: frame-ancestors is deliberately NOT here — browsers ignore
+     it in a meta tag; it only works as an HTTP header, which Pages cannot set. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self';" />
+<meta name="twitter:card" content="summary" />
+<meta name="twitter:title" content="SolidSay — Offline 3D Model & Thermal Design Studio" />
+<meta name="twitter:description" content="Turn plain words into printable 3D models — chips, boards, heatsinks and enclosures — with a built-in thermal solver. 100% offline, no cloud." />
+<!-- og:image: add once solidsay-icon.png is uploaded to the repo root (binary upload via GitHub web UI), then add og:image + twitter:image + favicon link. -->
 <link rel="icon" href="data:," />
 <title>SolidSay — Offline 3D Model & Thermal Design Studio</title>
 <!-- Zero external requests: three.js is vendored locally (MIT, r128)
