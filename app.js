@@ -264,11 +264,11 @@
     // MI300X). formatPeakTjShort is the documented compact form for tight
     // inline spots; the full reason stays in #statTj below and in all exports.
     tjEl.textContent = T.formatPeakTjShort(tj);
-    tjEl.className = tj > 100 ? "hot" : (tj > 80 ? "warm" : "cool");
+    tjEl.className = tj > 100 ? "flag" : (tj > 80 ? "warm" : "cool");
     $("#hudTheta").textContent = RESULT.thetaJA.toFixed(2) + " °C/W";
 
     $("#statTj").textContent = T.formatPeakTj(tj);
-    $("#statTj").className = "v " + (tj > 100 ? "bad" : (tj > 80 ? "" : "ok"));
+    $("#statTj").className = "v " + (tj > 100 ? "flag" : (tj > 80 ? "" : "ok"));
     $("#statTheta").textContent = RESULT.thetaJA.toFixed(2) + " °C/W";
     const totalMs = RESULT.ms + (ELEC_RESULT && isFinite(ELEC_RESULT.ms) ? ELEC_RESULT.ms : 0);
     $("#statMs").textContent = totalMs.toFixed(1) + " ms";
@@ -278,7 +278,7 @@
     if (hudElec && ELEC_RESULT) {
       if (ELEC_RESULT.hasPowerDelivery) {
         hudElec.textContent = ELEC_RESULT.worstIrDropShort + " · " + ELEC_RESULT.worstCurrentDensityShort + " (" + ELEC_RESULT.status + ")";
-        hudElec.className = ELEC_RESULT.pass ? "cool" : "hot";
+        hudElec.className = ELEC_RESULT.pass ? "cool" : "flag";
       } else {
         hudElec.textContent = EL.NO_POWER_MESSAGE;
         hudElec.className = "";
@@ -299,7 +299,7 @@
     }
 
     $("#bigTemp").textContent = tj > T.TJ_MODEL_LIMIT_C ? ">" + T.TJ_MODEL_LIMIT_C + "°C" : tj.toFixed(0) + "°C";
-    $("#bigTemp").style.color = tj > 100 ? "var(--red)" : (tj > 80 ? "var(--amber)" : "var(--green)");
+    $("#bigTemp").style.color = tj > 100 ? "var(--flag)" : (tj > 80 ? "var(--warm)" : "var(--ok)");
     $("#bigTempLabel").textContent = (S.showcase ? "Showcase · room-temp demo only · " : "Peak junction · ") + S.power + " W · " + P.MATERIALS[S.mat].label;
     $("#hotBanner").classList.toggle("show", tj > 100);
 

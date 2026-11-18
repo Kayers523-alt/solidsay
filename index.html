@@ -28,11 +28,61 @@
 <!-- Zero external requests: three.js is vendored locally (MIT, r128)
      and fonts are the system stack, so the sandbox runs fully offline. -->
 <style>
+/* ============================================================================
+   SolidSay REDESIGN — red theme + new layout (Worker 1 design deliverable)
+   ============================================================================
+   DROP-IN REPLACEMENT for the entire style block in index.html
+   (HEAD 957308e). Pure CSS + the HTML moves in w1/apply.md. No new
+   dependencies, no external requests, no solver/preset/pricing changes.
+
+   THEME IDEA — "warm charcoal + crimson"
+   The 3D die mesh is ALREADY crimson (app.js: 0xe11d48), so the UI accent
+   matches the model instead of fighting it. Backgrounds go from cold slate
+   blue to a near-black warm charcoal with a red undertone.
+
+   THREE-WAY RED SEPARATION (the hard constraint)
+   (a) UI accent ......... crimson/rose  #E11D48 family — buttons, active
+                           pills/tabs, links, focus. NEVER appears inside
+                           the 3D viewport or on the heatmap.
+   (b) Warning / limit ... AMBER #FBBF24 + "⚠" icon + words ("OVER LIMIT",
+   flags                         "FLAG", ">200 °C — model-limit output").
+                           Never color alone. Amber is also NOT used for
+                           any button, link, or active state.
+   (c) Heatmap scale ..... UNTOUCHED blue→red gradient
+                           #2563eb #06b6d4 #22c55e #eab308 #f97316 #dc2626
+                           in thermal-solver.js / app.js cellFieldColor and
+                           in .legend-row .bar below. It only ever appears
+                           ON the model / in the labeled legend bar, with
+                           °C endpoints, so it cannot be read as UI chrome.
+   Warm (80–100 °C) is a third, distinct orange #FB923C, no icon.
+   Cool / pass stays green #34D399 (unchanged).
+   ========================================================================== */
+
   :root{
-    --bg:#0B0F19; --panel:#1E293B; --panel2:#16202f; --line:#2b3a52;
-    --ink:#E2E8F0; --dim:#94A3B8; --faint:#64748B;
-    --cyan:#38BDF8; --cyan-d:#0EA5E9;
-    --red:#F87171; --red-bg:#451a1a; --amber:#FBBF24; --green:#34D399;
+    /* surfaces — warm charcoal, red undertone (was cold slate #0B0F19…) */
+    --bg:#150A0D; --panel:#241016; --panel2:#1C0D12; --line:#41222C;
+    /* text — warm near-white + rose-gray mutes (all AA on their surfaces) */
+    --ink:#F7F2F3; --dim:#C9B3B9; --faint:#A98D94;
+    /* (a) UI ACCENT — crimson / rose. Fill ramp is AA-safe with white text:
+       resting #BE123C 6.29:1 · hover #E11D48 4.70:1 · pressed #9F1239 8.02:1.
+       Raw #E11D48 as small text is only 3.85:1 — NEVER use it as text;
+       use --accent-text / --accent-text-bright instead. */
+    --accent:#E11D48; --accent-btn:#BE123C; --accent-btn-hover:#E11D48;
+    --accent-btn-pressed:#9F1239;
+    --accent-text:#FB7185;            /* 6.72:1 on --panel — active tab/pill text */
+    --accent-text-bright:#FDA4AF;     /* 9.57:1 on --panel — small accents, focus */
+    --accent-soft:#3A0F1B;            /* tinted bg for active pills/segments */
+    --accent-soft-line:#7A2440;       /* border for active pills/segments */
+    --focus:#FDA4AF;                  /* 10.27:1 on --bg — keyboard focus ring */
+    /* (b) WARNING / MODEL-LIMIT FLAG — amber, always + icon + words */
+    --flag:#FBBF24;                   /* 10.84:1 on --panel */
+    --flag-text:#FDE68A;              /* 11.96:1 on --flag-bg */
+    --flag-bg:#3A2203; --flag-line:#92400E; --flag-btn:#92400E; /* white on it 7.09:1 */
+    --flag-btn-hover:#B45309;         /* white on it 5.02:1 */
+    /* warm band 80–100 °C — distinct orange, no icon */
+    --warm:#FB923C;                   /* 7.99:1 on --panel */
+    /* (c) HEATMAP — DO NOT CHANGE. Gradient + solver stops stay as-is. */
+    --ok:#34D399;                     /* 9.41:1 on --panel — pass / cool / verified */
     --radius:10px;
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
@@ -45,110 +95,206 @@
   }
   .mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;}
   button{font:inherit; color:inherit; background:none; border:none; cursor:pointer;}
-  button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible{outline:2px solid var(--cyan); outline-offset:2px;}
+  button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible{outline:2px solid var(--focus); outline-offset:2px;}
 
-  /* ---------- top bar ---------- */
+  /* ---------- top bar: mobile = 2 rows, desktop = 1 row ---------- */
+  /* Mobile (393px): row 1 = brand | Record · row 2 = residual badge strip.
+     The badge is the dual-residual readout (real numbers, updated per solve);
+     it gets its own full-width row and WRAPS to 2 lines (FIX B) so the full
+     "Thermal residual X% · Electrical residual Y% ✓ · Z ms" string stays
+     readable instead of being ellipsized. Never nowrap/ellipsis here. */
   .topbar{
-    display:flex; align-items:center; flex-wrap:wrap; gap:8px; padding:8px 12px;
+    display:grid; grid-template-columns:minmax(0,1fr) auto; gap:6px 8px; padding:8px 12px;
     border-bottom:1px solid var(--line); background:var(--panel2); flex:0 0 auto;
     width:100%; max-width:100vw; overflow-x:hidden; scrollbar-width:none;
   }
   .topbar::-webkit-scrollbar{display:none;}
-  .brand{display:flex; align-items:baseline; gap:8px; min-width:0;}
+  .brand{display:flex; align-items:baseline; gap:8px; min-width:0; grid-column:1; grid-row:1;}
   .brand b{font-size:17px; letter-spacing:.2px; white-space:nowrap;}
-  .brand b span{color:var(--cyan);}
+  .brand b span{color:var(--accent-text);}
   .brand .tag{font-size:10px; letter-spacing:.14em; color:var(--dim); text-transform:uppercase; white-space:nowrap;}
-  .topbar .spacer{flex:1;}
+  .topbar .spacer{display:none;}
+  #recordBtn{grid-column:2; grid-row:1; white-space:nowrap; margin-left:auto;}
   .badge-local{
     display:inline-flex; align-items:center; gap:6px; padding:6px 10px;
     border:1px solid var(--line); border-radius:999px; background:var(--panel);
-    font-size:12px; font-weight:600; color:var(--green);
+    font-size:12px; font-weight:600; color:var(--ok);
     min-width:0; line-height:1.35; text-align:left;
+    grid-column:1 / -1; grid-row:2; width:100%;
   }
-  .badge-local .dot{width:8px; height:8px; border-radius:50%; background:var(--green); flex:0 0 auto;}
+  .badge-local .dot{width:8px; height:8px; border-radius:50%; background:var(--ok); flex:0 0 auto;}
+  .badge-local #localBadgeText{
+    /* FIX B: wrap (baseline behaviour) — the full residual string is ~591px
+       at 12px, the box is 333px @393 / 524px @1280, so nowrap+ellipsis cut
+       the numbers themselves. Wrapped it fits in 2 lines at both sizes. */
+    overflow:visible; text-overflow:clip; white-space:normal; overflow-wrap:break-word;
+    flex:1 1 auto; min-width:0;
+  }
   .btn{
     display:inline-flex; align-items:center; justify-content:center; gap:7px;
     padding:9px 14px; border-radius:var(--radius); border:1px solid var(--line);
     background:var(--panel); font-weight:600; font-size:14px; min-height:44px;
   }
   .btn:active{transform:translateY(1px);}
-  .btn.primary{background:var(--cyan-d); border-color:var(--cyan-d); color:#04121f;}
-  .btn.primary:hover{background:var(--cyan);}
+  .btn.primary{background:var(--accent-btn); border-color:var(--accent-btn); color:#fff;}
+  .btn.primary:hover{background:var(--accent-btn-hover); border-color:var(--accent-btn-hover);}
+  .btn.primary:active{background:var(--accent-btn-pressed); border-color:var(--accent-btn-pressed);}
   .btn.ghost{background:transparent;}
   .btn.small{min-height:38px; padding:6px 11px; font-size:13px;}
   .btn:disabled{opacity:.45; cursor:default;}
 
-  /* ---------- bottleneck banner ---------- */
+  /* ---------- bottleneck banner: AMBER flag, never red ---------- */
+  /* Shown when Tj > 100 °C (app.js toggles .show). Amber bg + amber border +
+     light-amber words. Its button is amber-fill, NOT crimson, so a flag can
+     never be mistaken for a primary action. */
   .banner{
     display:none; align-items:center; gap:10px; padding:9px 12px;
-    background:var(--red-bg); border-bottom:1px solid #7f2d2d; color:#FECACA;
-    font-size:13.5px; flex:0 0 auto;
+    background:var(--flag-bg); border-bottom:1px solid var(--flag-line); color:var(--flag-text);
+    font-size:13.5px; flex:0 0 auto; flex-wrap:wrap;
   }
   .banner.show{display:flex;}
   .banner b{color:#fff;}
-  .banner .btn{margin-left:auto; background:#991B1B; border-color:#B91C1C; color:#fff; min-height:38px; flex:0 0 auto;}
+  .banner .btn{margin-left:auto; background:var(--flag-btn); border-color:var(--flag-btn-hover); color:#fff; min-height:38px; flex:0 0 auto;}
+  .banner .btn:hover{background:var(--flag-btn-hover);}
 
   /* ---------- layout ---------- */
+  /* Mobile-first column: .stage (viewport + toolbar + readouts + legend)
+     on top, .panel (pills + tabs) below. Desktop ≥900px: side-by-side. */
   .layout{flex:1 1 auto; display:flex; flex-direction:column; min-height:0; width:100%; max-width:100vw; overflow:hidden;}
-  .viewport{position:relative; flex:1 1 46%; min-height:230px; background:radial-gradient(120% 90% at 50% 0%, #111c30 0%, var(--bg) 70%);}
+  /* .stage groups everything that belongs to the 3D view. It is the left
+     column on desktop and the top block on mobile. */
+  .stage{flex:1 1 44%; min-height:0; display:flex; flex-direction:column; width:100%; max-width:100vw; overflow:hidden;}
+  /* THE VIEWPORT CONTAINS NOTHING BUT THE CANVAS (+ big-temp while
+     recording, + the WebGL-fallback message). No HUD chips, no buttons, no
+     legend are overlaid on it any more — the P1 collision (chips covering
+     the view pills, long >200 °C flag covering all four) is ended by
+     construction: there is nothing left inside the viewport to collide. */
+  .viewport{position:relative; flex:1 1 auto; min-height:230px; background:radial-gradient(120% 90% at 50% 0%, #2A1219 0%, var(--bg) 70%);}
   #gl{position:absolute; inset:0;}
   #gl canvas{display:block;}
   .gl-fallback{position:absolute; inset:0; display:none; place-items:center; color:var(--dim); padding:20px; text-align:center; font-size:14px;}
-  .hud{position:absolute; top:10px; left:10px; display:flex; flex-direction:column; gap:6px; pointer-events:none;}
-  .hud .chip{
-    background:rgba(11,15,25,.82); border:1px solid var(--line); border-radius:8px;
-    padding:6px 10px; font-size:12px; color:var(--dim); width:max-content; max-width:78vw;
-  }
-  .hud .chip b{display:block; font-size:19px; color:var(--ink); font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace; font-weight:600;}
-  .hud .chip b.hot{color:var(--red);} .hud .chip b.warm{color:var(--amber);} .hud .chip b.cool{color:var(--green);}
-  .hud .chip.delta b{font-size:15px;}
-  /* P1 W3: the view-mode pills live in their own static row at the top of the
-     panel (first child of .panel), NOT overlaid on the 3D viewport. They used
-     to sit absolutely positioned at top:56px inside the viewport, sharing the
-     same band as the .hud chip column — the Peak Tj chip clipped them by 7px
-     on every preset, the θJA chip was half-hidden behind them, and the long
-     >200 °C flag covered all four. Separating the layers fixes all of it at
-     once, in column and row layout alike, with no overlay collisions left. */
-  .mode-switcher{flex:0 0 auto; display:flex; gap:6px; flex-wrap:wrap; padding:12px 10px 0;}
-  .legend{
-    position:absolute; right:10px; bottom:10px; background:rgba(11,15,25,.82);
-    border:1px solid var(--line); border-radius:8px; padding:7px 9px; font-size:11px; color:var(--dim);
-    display:flex; align-items:center; gap:8px; pointer-events:none;
-  }
-  .legend .bar{width:110px; height:9px; border-radius:5px; background:linear-gradient(90deg,#2563eb,#06b6d4,#22c55e,#eab308,#f97316,#dc2626);}
   .big-temp{
     position:absolute; inset:auto 0 26px 0; text-align:center; display:none; pointer-events:none;
   }
   .big-temp .t{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace; font-size:min(19vw,96px); font-weight:600; line-height:1; text-shadow:0 4px 30px rgba(0,0,0,.6);}
   .big-temp .l{font-size:13px; letter-spacing:.18em; text-transform:uppercase; color:var(--dim); margin-top:6px;}
   body.recording .big-temp{display:block;}
-  body.recording .hud, body.recording .legend{display:none;}
-  .view-tools{position:absolute; top:10px; right:10px; display:flex; gap:6px;}
-  .view-tools .btn{background:rgba(30,41,59,.9); min-height:38px; padding:6px 10px; font-size:12.5px;}
+  body.recording .view-toolbar, body.recording .readout-strip, body.recording .legend-row{display:none;}
+  body.recording .stage{flex:1 1 100%;}
+
+  /* ---------- viewport toolbar (was .view-tools, overlaid top-right) ---------- */
+  /* Static row directly under the canvas. Auto-rotate / Reset view are
+     always in the same place, never floating over the model. */
+  .view-toolbar{
+    flex:0 0 auto; display:flex; gap:8px; align-items:center;
+    padding:10px 12px; background:var(--panel2); border-top:1px solid var(--line);
+  }
+  .view-toolbar .btn{background:var(--panel); min-height:38px; padding:6px 12px; font-size:12.5px;}
+  .view-toolbar .btn[aria-pressed="true"]{
+    background:var(--accent-soft); color:var(--accent-text);
+    border-color:var(--accent-soft-line); box-shadow:inset 0 0 0 1px var(--accent-soft-line);
+  }
+
+  /* ---------- readout strip (was .hud chips, overlaid top-left) ---------- */
+  /* Static row of stat cards under the toolbar. Same five readouts, same
+     element IDs (#hudTj #hudTheta #hudElec #hudDeltaChip/#hudDelta
+     #hudProbeChip/#hudProbe) — app.js untouched except the "hot"→"flag"
+     class rename in w1/apply.md. On mobile (≤899px) it is a GRID, not a
+     swipe row (FIX C2) — all cards fit the viewport at load.
+     Value states: .cool green (pass) · .warm orange (80–100 °C) ·
+     .flag amber + "⚠" prefix + the words the JS already writes
+     (">200 °C", "⚠ FLAG") — never color alone. */
+  .readout-strip{
+    flex:0 0 auto; display:flex; gap:8px; overflow-x:auto; scrollbar-width:none;
+    scroll-snap-type:x proximity; padding:10px 12px;
+    background:var(--panel2); border-top:1px solid var(--line);
+  }
+  .readout-strip::-webkit-scrollbar{display:none;}
+  .readout-strip .card{
+    scroll-snap-align:start; flex:0 0 auto; min-width:118px; max-width:200px;
+    background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
+    padding:8px 10px;
+  }
+  .readout-strip .card .k{font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--faint); line-height:1.3;}
+  .readout-strip .card b{
+    display:block; margin-top:2px; font-size:18px; color:var(--ink);
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace; font-weight:600;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .readout-strip .card b.cool{color:var(--ok);}
+  .readout-strip .card b.warm{color:var(--warm);}
+  .readout-strip .card b.flag{color:var(--flag);}
+  .readout-strip .card b.flag::before{content:"⚠ ";}
+  /* FIX C: #hudElec wraps to 2 lines instead of ellipsizing. Its value
+     ("6.8 mV · 9.68 A/mm² (PASS)", 235px) and the passive notice
+     ("no power delivery in this part", 271px) are both wider than the card
+     (178px @393 / 251px @1280), so nowrap cut "(PASS)" and the notice.
+     Wrapped, line 1 holds the numbers, line 2 the status word. */
+  #hudElec{font-size:15px !important; white-space:normal; overflow:visible; text-overflow:clip; line-height:1.3;}
+
+  /* ---------- legend row (was .legend, overlaid bottom-right) ---------- */
+  /* Static full-width bar under the readouts. Gradient UNCHANGED (heatmap
+     scale, blue→red) and always labeled with live °C / A/mm² endpoints
+     written by app.js (#legendLo / #legendHi). */
+  .legend-row{
+    flex:0 0 auto; display:flex; align-items:center; gap:8px;
+    padding:8px 12px; background:var(--panel2); border-top:1px solid var(--line);
+    font-size:11px; color:var(--dim);
+  }
+  .legend-row .bar{
+    flex:1 1 auto; height:9px; border-radius:5px;
+    background:linear-gradient(90deg,#2563eb,#06b6d4,#22c55e,#eab308,#f97316,#dc2626);
+  }
+  .legend-row span{white-space:nowrap; font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;}
 
   /* ---------- panel / drawer ---------- */
   .panel{
-    flex:1 1 54%; min-height:0; display:flex; flex-direction:column;
+    flex:1 1 56%; min-height:0; display:flex; flex-direction:column;
     background:var(--panel2); border-top:1px solid var(--line); width:100%; max-width:100vw; overflow:hidden;
   }
   body.recording .panel, body.recording .topbar .hide-rec, body.recording .statusbar{display:none;}
   body.recording .viewport{flex:1 1 100%;}
-  .tabs{display:flex; gap:4px; padding:8px 10px 0; flex:0 0 auto; overflow-x:auto; scrollbar-width:none; width:100%; max-width:100vw;}
+
+  /* View-mode pills (Top / Mirrored Bottom / Stackup / Compare).
+     P1 fix PRESERVED: they live in their own static row at the top of the
+     panel, first child of .panel — never overlaid on the viewport.
+     Mobile: one horizontal scroll-snap row (swipe, no wrap, 44px targets).
+     Desktop: a tidy 2×2 grid inside the 420px panel. */
+  .mode-switcher{flex:0 0 auto; display:flex; gap:6px; flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none; scroll-snap-type:x proximity; padding:12px 10px 0;}
+  .mode-switcher::-webkit-scrollbar{display:none;}
+  .mode-switcher .mode-pill{flex:0 0 auto; scroll-snap-align:start; min-height:44px; max-width:78vw;}
+  .mode-pill[aria-pressed="true"]{
+    background:var(--accent-soft); color:var(--accent-text);
+    border-color:var(--accent-soft-line); box-shadow:inset 0 0 0 1px var(--accent-soft-line);
+  }
+
+  .tabs{display:flex; gap:4px; padding:8px 10px 0; flex:0 0 auto; width:100%; max-width:100vw; overflow-x:auto; scrollbar-width:none;}
   .tabs::-webkit-scrollbar{display:none;}
   .tab{
-    padding:9px 14px; border-radius:9px 9px 0 0; font-weight:600; font-size:13.5px; color:var(--dim);
+    /* FIX D: flex:1 0 auto (was 1 1 0). Equal-width tabs gave each tab only
+       88px @393 / 95px @1280, but "Thermal & PDN" needs 101px and
+       "Export & Plans" 96px, so labels clipped and ran together. Now each
+       tab is at least as wide as its label (never shrinks below it) and the
+       spare width is shared out by flex-grow, so full labels fit at both
+       sizes with no rename. The strip scrolls horizontally only on screens
+       narrower than the labels' total width. */
+    flex:1 0 auto; min-width:0; text-align:center;
+    padding:9px 4px; border-radius:9px 9px 0 0; font-weight:600; font-size:13px; color:var(--dim);
     border:1px solid transparent; border-bottom:none; white-space:nowrap; min-height:40px;
   }
-  .tab[aria-selected="true"]{background:var(--panel); color:var(--cyan); border-color:var(--line);}
-  .tabbody{flex:1 1 auto; overflow-y:auto; background:var(--panel); border-top:1px solid var(--line); padding:14px; -webkit-overflow-scrolling:touch;}
+  .tab[aria-selected="true"]{
+    background:var(--panel); color:var(--accent-text); border-color:var(--line);
+    box-shadow:inset 0 3px 0 var(--accent-btn); /* crimson tick marks the active tab */
+  }
+  .tabbody{flex:1 1 auto; overflow-y:auto; background:var(--panel); border-top:1px solid var(--line); padding:16px 14px; -webkit-overflow-scrolling:touch;}
   .tabpage{display:none; flex-direction:column; gap:16px;}
   .tabpage.active{display:flex;}
   h2{font-size:13px; letter-spacing:.12em; text-transform:uppercase; color:var(--dim); margin:0 0 8px;}
   p.note{color:var(--dim); font-size:13px; line-height:1.5; margin:0;}
   .field{display:flex; flex-direction:column; gap:6px;}
   .field label{display:flex; justify-content:space-between; font-size:13.5px; font-weight:500;}
-  .field label output{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace; color:var(--cyan); font-weight:600;}
-  input[type=range]{width:100%; accent-color:var(--cyan); height:32px;}
+  .field label output{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace; color:var(--accent-text); font-weight:600;}
+  input[type=range]{width:100%; accent-color:var(--accent-btn); height:32px;}
   input[type=text], textarea, select{
     width:100%; background:var(--bg); border:1px solid var(--line); border-radius:var(--radius);
     color:var(--ink); padding:11px 12px; font:inherit; font-size:16.5px; min-height:44px;
@@ -156,47 +302,78 @@
   textarea{resize:vertical; min-height:64px;}
   .seg{display:flex; background:var(--bg); border:1px solid var(--line); border-radius:var(--radius); padding:3px; gap:3px; flex-wrap:wrap;}
   .seg button{flex:1 1 auto; padding:9px 8px; border-radius:7px; font-weight:600; font-size:13px; color:var(--dim); min-height:40px; white-space:nowrap;}
-  .seg button[aria-pressed="true"]{background:var(--panel); color:var(--cyan); box-shadow:inset 0 0 0 1px var(--line);}
-  .pills{display:flex; flex-wrap:wrap; gap:8px;}
+  .seg button[aria-pressed="true"]{
+    background:var(--accent-soft); color:var(--accent-text);
+    box-shadow:inset 0 0 0 1px var(--accent-soft-line);
+  }
+
+  /* Famous-hardware pills + preset picker (Boards tab).
+     Mobile: one swipeable scroll row — 9 pills (5 famous + 4 ProtoFlow)
+     no longer stack into a tall wall above the prompt box.
+     Desktop: wraps into a grid as before. */
+  .pills{display:flex; flex-wrap:nowrap; gap:8px; overflow-x:auto; scrollbar-width:none; scroll-snap-type:x proximity; padding-bottom:4px;}
+  .pills::-webkit-scrollbar{display:none;}
   .pill{
     border:1px solid var(--line); background:var(--bg); border-radius:999px; padding:9px 13px;
     font-size:13px; font-weight:600; min-height:40px; display:inline-flex; gap:7px; align-items:center;
+    flex:0 0 auto; scroll-snap-align:start; white-space:nowrap;
   }
-  .pill .w{color:var(--cyan); font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace; font-size:12px;}
-  .pill[aria-pressed="true"]{border-color:var(--cyan); color:var(--cyan);}
+  .pill .w{color:var(--dim); font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace; font-size:12px;}
+  .pill[aria-pressed="true"]{
+    border-color:var(--accent); color:var(--accent-text); background:var(--accent-soft);
+    box-shadow:inset 0 0 0 1px var(--accent-soft-line);
+  }
+  .pill[aria-pressed="true"] .w{color:var(--accent-text-bright);}
+  /* Preset library stays a LIST (grouped native <select> + Load button),
+     not a 50-card grid — see w1/report.md for the justification. The select
+     keeps its 7 optgroups (built by app.js); the Load button is primary. */
+  #presetApplyBtn{width:100%;}
+
   .grid2{display:grid; grid-template-columns:1fr 1fr; gap:12px;}
-  .stat-row{display:flex; flex-wrap:wrap; gap:8px;}
+  .stat-row{display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:8px;}
   .stat{
-    flex:1 1 100px; background:var(--bg); border:1px solid var(--line); border-radius:var(--radius); padding:9px 11px;
+    background:var(--bg); border:1px solid var(--line); border-radius:var(--radius); padding:9px 11px; min-width:0;
   }
   .stat .k{font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--faint);}
-  .stat .v{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace; font-size:16px; font-weight:600; margin-top:2px;}
-  .ok{color:var(--green);} .bad{color:var(--red);}
+  .stat .v{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace; font-size:16px; font-weight:600; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .ok{color:var(--ok);}
+  /* .flag is the renamed .bad: amber + icon + words, never color alone.
+     .bad is kept as a defensive alias so any missed call site still renders
+     as a flag, not as UI red. */
+  .flag, .bad{color:var(--flag);}
+  .flag::before{content:"⚠ ";}
+  .bad::before{content:"⚠ ";}
   #grid2d{width:100%; max-width:340px; aspect-ratio:1; border:1px solid var(--line); border-radius:var(--radius); image-rendering:pixelated; background:var(--bg);}
+
+  /* ---------- export tab ---------- */
   .export-grid{display:grid; grid-template-columns:1fr 1fr; gap:10px;}
+  .export-grid .ar-card{grid-column:1 / -1;} /* AR is the hero: full-width first, both sizes */
   .export-grid .btn{flex-direction:column; gap:3px; padding:13px 10px; min-height:64px;}
   .export-grid .btn small{font-weight:400; color:var(--dim); font-size:11.5px;}
+  .export-grid .btn.primary small{color:#FFD9DE;} /* 4.86:1 on #BE123C */
+  .export-grid .btn.primary:hover small{color:#fff;} /* #FFD9DE is only 3.63:1 on hover #E11D48 */
   a.btn{text-decoration:none; text-align:center;}
   #expUsdz[aria-disabled="true"]{opacity:.55;}
   #arThumb{width:36px; height:36px; border-radius:7px; object-fit:cover; background:var(--bg); border:1px solid rgba(255,255,255,.25);}
-  .export-grid .btn.primary small{color:#0b3548;}
   .price{
     border:1px solid var(--line); border-radius:var(--radius); background:var(--bg); padding:13px;
     display:flex; flex-direction:column; gap:5px;
   }
   .price .plan{font-weight:700; font-size:15px;}
-  .price .amt{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace; font-size:20px; color:var(--cyan);}
+  .price .amt{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace; font-size:20px; color:var(--accent-text);}
   .price .amt small{font-size:12px; color:var(--dim);}
   .price p{margin:0; font-size:13px; color:var(--dim); line-height:1.45;}
-  .planned{font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--amber); font-weight:700;}
+  .planned{font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--flag); font-weight:700;}
+
+  /* ---------- footer statusbar ---------- */
   .statusbar{
     flex:0 0 auto; padding:7px 12px; border-top:1px solid var(--line); background:var(--panel2);
-    font-size:12px; color:var(--dim); display:flex; gap:14px; flex-wrap:wrap;
+    font-size:12px; color:var(--dim); display:grid; grid-template-columns:1fr 1fr; gap:2px 14px;
   }
   .statusbar b{color:var(--ink);}
 
   /* ---------- modal ---------- */
-  .scrim{position:fixed; inset:0; background:rgba(2,6,16,.72); display:none; place-items:end center; z-index:50; padding:0;}
+  .scrim{position:fixed; inset:0; background:rgba(8,2,4,.72); display:none; place-items:end center; z-index:50; padding:0;}
   .scrim.open{display:grid;}
   .sheet{
     background:var(--panel); border:1px solid var(--line); border-radius:16px 16px 0 0;
@@ -208,22 +385,86 @@
   .sheet .row{display:flex; gap:10px; flex-wrap:wrap; margin-top:16px;}
   .sheet .row .btn{flex:1 1 150px;}
   @media (min-width:560px){ .scrim{place-items:center; padding:18px;} .sheet{border-radius:16px;} }
-  #recordBtn{white-space:nowrap;}
+
+  /* ---------- small screens ---------- */
   @media (max-width:600px){
     .brand .tag{display:none;}
-    .badge-local{font-size:11px; padding:6px 8px; flex:1 1 100%; order:2;}
-    .topbar{row-gap:6px;}
-    .topbar .spacer{display:none;}
-    #recordBtn{margin-left:auto; order:1;}
+    .banner{flex-direction:column; align-items:stretch;}
+    .banner .btn{margin-left:0; width:100%;}
   }
 
+  /* ---------- desktop ---------- */
   @media (min-width:900px){
     .layout{flex-direction:row;}
+    .stage{flex:1 1 auto; min-height:0;}
     .viewport{flex:1 1 auto; min-height:0;}
-    .panel{flex:0 0 400px; border-top:none; border-left:1px solid var(--line); height:100%;}
+    .panel{flex:0 0 420px; border-top:none; border-left:1px solid var(--line); height:100%;}
+    /* header back to one row */
+    .topbar{display:flex; align-items:center; flex-wrap:nowrap; gap:8px;}
+    .topbar .spacer{display:block; flex:1;}
+    .brand{grid-column:auto; grid-row:auto;}
+    #recordBtn{grid-column:auto; grid-row:auto; margin-left:0;}
+    .badge-local{grid-column:auto; grid-row:auto; width:auto; flex:0 1 560px;}
+    /* readouts: 4-across grid, no scrolling */
+    .readout-strip{display:grid; grid-template-columns:repeat(auto-fit, minmax(110px, 1fr)); overflow:visible;}
+    .readout-strip .card{min-width:0; max-width:none;}
+    /* famous pills wrap again; view pills become a 2×2 grid */
+    .pills{flex-wrap:wrap; overflow:visible;}
+    .mode-switcher{display:grid; grid-template-columns:1fr 1fr; overflow:visible; padding:12px 10px 0;}
+    .mode-switcher .mode-pill{max-width:none; justify-content:center;}
+    .statusbar{display:flex; gap:14px; flex-wrap:wrap;}
   }
   @media (prefers-reduced-motion: reduce){
     *{transition:none !important; animation:none !important;}
+  }
+
+  /* ---------- mobile page scroll (FIX A — Defect A) ---------- */
+  /* Root cause: body was height:100dvh + overflow:hidden, .layout flex:1 and
+     .stage flex:1 1 44% with overflow:hidden — so at 393 the stage was
+     squeezed to 251px while its content needs ~410px (viewport 230 +
+     toolbar 59 + readout ~91 + legend 30). The toolbar was clipped to a
+     21px sliver under the panel and the readout strip + legend sat under
+     the opaque panel, unreachable, in BOTH banner states.
+     Fix (critic prescription (i)): on mobile the page scrolls like a normal
+     web page instead of being a fixed-height app shell. The stage sizes to
+     its content, so toolbar + readout strip + legend are all fully visible
+     at load (topbar ~104 + banner ~103 + stage ~410 = ~617 < 852) and the
+     panel follows below in the same scroll. The viewport keeps its 230px
+     height; the canvas is unchanged. Desktop (min-width:900px) is untouched
+     — it keeps the fixed-height row layout with the internally-scrolling
+     tab body. */
+  @media (max-width:899px){
+    body{height:auto; min-height:100dvh; overflow-x:hidden; overflow-y:auto;}
+    .layout{flex:0 0 auto; overflow:visible;}
+    .stage{flex:0 0 auto; overflow:visible;}
+    .viewport{flex:0 0 auto; height:230px; min-height:230px;}
+    .panel{flex:0 0 auto; overflow:visible;}
+    .tabbody{flex:0 0 auto; overflow:visible;}
+    /* FIX C2 (re-gate, gate C): the readout strip was a horizontal
+       scroll-snap carousel on mobile (strip scrollWidth 552–564px vs the
+       393px viewport), so the IR-drop card sat ~70% off-screen at load
+       and only 23–30% of #hudElec was visible — MI300X hid "9.68 A/mm²",
+       Pi 5 hid "15.11" AND "(PASS)", Wall Bracket hid most of its notice.
+       scrollWidth = clientWidth on #hudElec only proved the text wasn't
+       ellipsized inside its own box; the box itself was off-screen.
+       Fix (critic prescription (i)): the same grid the ≥900px rule
+       already uses — all three cards fit 393px at load, no horizontal
+       scrolling, no swipe needed. Cards get min-width:0 so they can
+       shrink to their grid track; card values may wrap (they are ~118px
+       wide now, so a long θJA value must wrap, not ellipsis); #hudElec
+       keeps its FIX C wrap (now ~3 lines in the narrower card). If a
+       preset shows the 4th/5th card, the grid wraps it to a second row.
+       The mode-pills row stays a swipe row — that one is deliberate. */
+    .readout-strip{display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); overflow:visible; scroll-snap-type:none;}
+    .readout-strip .card{min-width:0; max-width:none;}
+    .readout-strip .card b{white-space:normal; overflow:visible; text-overflow:clip; line-height:1.3;}
+    /* Recording mode keeps the old fixed-height shell: panel/status bar/
+       readouts hidden, viewport fills the screen. These must come after
+       the rules above (same specificity as the base recording rules). */
+    body.recording{height:100dvh; overflow:hidden;}
+    body.recording .layout{flex:1 1 auto; overflow:hidden;}
+    body.recording .stage{flex:1 1 100%; overflow:hidden;}
+    body.recording .viewport{flex:1 1 auto; height:auto; min-height:0;}
   }
 </style>
 </head>
@@ -242,32 +483,37 @@
 </header>
 
 <div class="banner" id="hotBanner" role="alert">
-  <span>🔥 <b>Thermal bottleneck:</b>&nbsp;peak junction is over 100&nbsp;°C. The heatsink can't shed this load as designed.</span>
+  <span>⚠️ <b>Thermal bottleneck:</b>&nbsp;peak junction is over 100&nbsp;°C. The heatsink can't shed this load as designed.</span>
   <button class="btn small" id="autoOptBtn" type="button">Auto-Optimize Heatsink</button>
 </div>
 
 <div class="layout">
+  <div class="stage">
   <section class="viewport" aria-label="3D thermal viewport">
     <div id="gl"></div>
 
     <div class="gl-fallback" id="glFallback">The 3D view needs WebGL. The thermal &amp; electrical solvers below still run — check the 2D grid in the Thermal tab.</div>
-    <div class="hud">
-      <div class="chip">Peak Tj <b id="hudTj">—</b></div>
-      <div class="chip">θJA (junction → ambient) <b id="hudTheta">—</b></div>
-      <div class="chip" id="hudElecChip">IR drop · Current density <b id="hudElec" style="font-size:15px;">—</b></div>
-      <div class="chip delta" id="hudDeltaChip" hidden>Bare die vs heatsink <b id="hudDelta">—</b></div>
-      <div class="chip" id="hudProbeChip" hidden>3D Surface Probe <b id="hudProbe">—</b></div>
-    </div>
-    <div class="view-tools">
-      <button class="btn" id="spinBtn" type="button" aria-pressed="false">Auto-rotate</button>
-      <button class="btn" id="resetCamBtn" type="button">Reset view</button>
-    </div>
     <div class="big-temp" aria-hidden="true">
       <div class="t" id="bigTemp">—</div>
       <div class="l" id="bigTempLabel">Peak junction temperature</div>
     </div>
-    <div class="legend"><span id="legendLo">25°</span><span class="bar" id="legendBar"></span><span id="legendHi">100°</span></div>
   </section>
+
+  <div class="view-toolbar">
+    <button class="btn" id="spinBtn" type="button" aria-pressed="false">Auto-rotate</button>
+    <button class="btn" id="resetCamBtn" type="button">Reset view</button>
+  </div>
+
+  <div class="readout-strip" aria-label="Live readouts">
+    <div class="card"><span class="k">Peak Tj</span><b id="hudTj">—</b></div>
+    <div class="card"><span class="k">θJA · junction → ambient</span><b id="hudTheta">—</b></div>
+    <div class="card"><span class="k">IR drop · Current density</span><b id="hudElec">—</b></div>
+    <div class="card" id="hudDeltaChip" hidden><span class="k">Bare die vs heatsink</span><b id="hudDelta">—</b></div>
+    <div class="card" id="hudProbeChip" hidden><span class="k">3D Surface Probe</span><b id="hudProbe">—</b></div>
+  </div>
+
+  <div class="legend-row"><span id="legendLo">25°</span><span class="bar" id="legendBar"></span><span id="legendHi">100°</span></div>
+  </div>
 
   <aside class="panel">
     <div class="mode-switcher">
